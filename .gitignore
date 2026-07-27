@@ -1,29 +1,31 @@
-# Android / Gradle
-.gradle/
-**/build/
-local.properties
-captures/
-.externalNativeBuild/
-.cxx/
-
-# Android build artifacts
-*.apk
-*.ap_
-*.aab
-*.dex
-
-# Android Studio / IntelliJ IDEA
+# Android Studio / IntelliJ
 .idea/
 *.iml
 
-# Kotlin
+# Gradle / Kotlin
+.gradle/
 .kotlin/
+**/build/
 
-# Signing keys and local secrets
+# Local Android SDK configuration
+local.properties
+
+# Native build output
+.externalNativeBuild/
+.cxx/
+
+# Captures and generated files
+captures/
+
+# Signing material
 *.jks
 *.keystore
-*.properties.local
+keystore.properties
 
-# OS files
+# Operating systems
 .DS_Store
 Thumbs.db
+
+# Environment files
+.env
+.env.*

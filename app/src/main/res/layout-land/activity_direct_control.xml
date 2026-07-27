@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_app"
+    android:orientation="horizontal"
+    android:padding="10dp">
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="match_parent"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnBack"
+                android:layout_width="54dp"
+                android:layout_height="46dp"
+                android:contentDescription="Regresar"
+                android:gravity="center"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:padding="0dp"
+                android:text=""
+                app:cornerRadius="15dp"
+                app:icon="@drawable/ic_arrow_back"
+                app:iconGravity="textStart"
+                app:iconPadding="0dp"
+                app:iconSize="24dp"
+                app:iconTint="@color/text_primary" />
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="Control directo"
+                android:textColor="@color/text_primary"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/switchDetection"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Detección"
+                android:textColor="@color/text_primary" />
+        </LinearLayout>
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="@color/stroke"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="8dp">
+
+                <TextView
+                    android:id="@+id/txtStatus"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Preparando componentes"
+                    android:textColor="@color/text_primary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/txtUsbState"
+                    android:layout_width="70dp"
+                    android:layout_height="30dp"
+                    android:background="@drawable/bg_chip_idle"
+                    android:gravity="center"
+                    android:text="USB"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="9sp" />
+
+                <TextView
+                    android:id="@+id/txtCameraState"
+                    android:layout_width="72dp"
+                    android:layout_height="30dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_chip_idle"
+                    android:gravity="center"
+                    android:text="Cámara"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="9sp" />
+
+                <TextView
+                    android:id="@+id/txtDetectionState"
+                    android:layout_width="82dp"
+                    android:layout_height="30dp"
+                    android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_chip_idle"
+                    android:gravity="center"
+                    android:text="Detección"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="9sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:layout_weight="1"
+            app:cardBackgroundColor="@color/surface"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="@color/stroke"
+            app:strokeWidth="1dp">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:layout_margin="7dp"
+                android:background="@drawable/bg_video">
+
+                <androidx.camera.view.PreviewView
+                    android:id="@+id/previewView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <com.mechrobotix.mechbot.DetectionOverlayView
+                    android:id="@+id/detectionOverlay"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <TextView
+                    android:id="@+id/txtDetectionSummary"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom|start"
+                    android:layout_margin="7dp"
+                    android:background="@drawable/bg_chip_idle"
+                    android:padding="6dp"
+                    android:text="Buscando objetos"
+                    android:textColor="@color/text_primary"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
+
+    <com.google.android.material.card.MaterialCardView
+        android:layout_width="290dp"
+        android:layout_height="match_parent"
+        android:layout_marginStart="8dp"
+        app:cardBackgroundColor="@color/surface"
+        app:cardCornerRadius="18dp"
+        app:cardElevation="0dp"
+        app:strokeColor="@color/stroke"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="10dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="Movimiento"
+                android:textColor="@color/text_primary"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/txtMovement"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_chip_idle"
+                android:minWidth="112dp"
+                android:padding="6dp"
+                android:text="Detenido"
+                android:textAlignment="center"
+                android:textColor="@color/text_primary"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnForward"
+                android:layout_width="82dp"
+                android:layout_height="56dp"
+                android:layout_marginTop="7dp"
+                android:text="▲"
+                android:textSize="24sp"
+                app:cornerRadius="18dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:gravity="center"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnLeft"
+                    android:layout_width="78dp"
+                    android:layout_height="56dp"
+                    android:text="◀"
+                    android:textSize="24sp"
+                    app:cornerRadius="18dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnStop"
+                    android:layout_width="92dp"
+                    android:layout_height="56dp"
+                    android:layout_marginStart="5dp"
+                    android:layout_marginEnd="5dp"
+                    android:text="STOP"
+                    android:textStyle="bold"
+                    app:backgroundTint="@color/danger"
+                    app:cornerRadius="18dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnRight"
+                    android:layout_width="78dp"
+                    android:layout_height="56dp"
+                    android:text="▶"
+                    android:textSize="24sp"
+                    app:cornerRadius="18dp" />
+            </LinearLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnBackward"
+                android:layout_width="82dp"
+                android:layout_height="56dp"
+                android:layout_marginTop="4dp"
+                android:text="▼"
+                android:textSize="24sp"
+                app:cornerRadius="18dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+</LinearLayout>

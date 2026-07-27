@@ -34,6 +34,7 @@ class UsbKeyboardLedMotorController(
     private var interruptOutEndpoint: UsbEndpoint? = null
     private var connectedDeviceId: Int? = null
     private var lastMask = 0
+    private var permissionRequestDeviceId: Int? = null
     private var receiverRegistered = false
 
     private val receiver = object : BroadcastReceiver() {
@@ -45,23 +46,31 @@ class UsbKeyboardLedMotorController(
                         intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) ||
                             usbManager.hasPermission(device)
                         )
-                    if (device != null && granted) {
-                        synchronized(lock) {
+                    synchronized(lock) {
+                        permissionRequestDeviceId = null
+                        if (device != null && granted) {
+                            lastMask = 0
                             closeLocked()
-                            if (connectLocked(device)) sendReportLocked(lastMask)
+                            if (connectLocked(device)) sendReportLocked(0)
+                        } else {
+                            onStatus("Permiso USB denegado.")
                         }
-                    } else {
-                        onStatus("Permiso USB denegado.")
+                        Unit
                     }
                 }
                 UsbManager.ACTION_USB_DEVICE_ATTACHED -> handleIntent(intent)
                 UsbManager.ACTION_USB_DEVICE_DETACHED -> {
                     val device = intent.parcelableExtraCompat<UsbDevice>(UsbManager.EXTRA_DEVICE)
                     synchronized(lock) {
+                        if (device != null && device.deviceId == permissionRequestDeviceId) {
+                            permissionRequestDeviceId = null
+                        }
                         if (device != null && device.deviceId == connectedDeviceId) {
+                            lastMask = 0
                             closeLocked()
                             onStatus("Teclado USB desconectado.")
                         }
+                        Unit
                     }
                 }
             }
@@ -76,39 +85,53 @@ class UsbKeyboardLedMotorController(
         registerReceiver()
     }
 
-    fun prepare() {
+    override fun prepare() {
         synchronized(lock) {
+            lastMask = 0
             if (connection == null) {
-                connectOrRequestLocked()
+                if (connectOrRequestLocked()) sendReportLocked(0)
             } else {
-                sendReportLocked(lastMask)
+                sendReportLocked(0)
             }
+            Unit
         }
     }
 
     fun handleIntent(intent: Intent?) {
         val device = intent?.parcelableExtraCompat<UsbDevice>(UsbManager.EXTRA_DEVICE)
         synchronized(lock) {
+            lastMask = 0
             if (device != null) {
-                closeLocked()
-                if (connectLocked(device)) sendReportLocked(lastMask)
+                if (connection != null && connectedDeviceId == device.deviceId) {
+                    sendReportLocked(0)
+                } else {
+                    closeLocked()
+                    if (connectLocked(device)) sendReportLocked(0)
+                }
             } else if (connection == null) {
-                connectOrRequestLocked()
+                if (connectOrRequestLocked()) sendReportLocked(0)
             }
+            Unit
         }
     }
 
-    override fun send(command: MechbotCommand) {
-        val mask = command.toLedMask() ?: return
+    override fun isReady(): Boolean = synchronized(lock) {
+        connection != null && keyboardInterface != null
+    }
+
+    override fun send(command: MovementCommand): Boolean {
+        val mask = command.toLedMask()
         synchronized(lock) {
             lastMask = mask
-            if (connection == null && !connectOrRequestLocked()) return
-            if (!sendReportLocked(mask)) {
-                val deviceId = connectedDeviceId
-                closeLocked()
-                val device = usbManager.deviceList.values.firstOrNull { it.deviceId == deviceId }
-                if (device != null && connectLocked(device)) sendReportLocked(mask)
+            if (connection == null) {
+                if (command == MovementCommand.STOP) return false
+                if (!connectOrRequestLocked()) return false
             }
+            if (sendReportLocked(mask)) return true
+            val deviceId = connectedDeviceId
+            closeLocked()
+            val device = usbManager.deviceList.values.firstOrNull { it.deviceId == deviceId }
+            return device != null && connectLocked(device) && sendReportLocked(mask)
         }
     }
 
@@ -132,11 +155,18 @@ class UsbKeyboardLedMotorController(
             return false
         }
         if (!usbManager.hasPermission(target.device)) {
-            usbManager.requestPermission(target.device, permissionIntent)
-            onStatus("Solicitando permiso USB.")
+            requestPermissionLocked(target.device)
             return false
         }
         return connectLocked(target.device)
+    }
+
+    private fun requestPermissionLocked(device: UsbDevice) {
+        if (permissionRequestDeviceId != device.deviceId) {
+            permissionRequestDeviceId = device.deviceId
+            usbManager.requestPermission(device, permissionIntent)
+        }
+        onStatus("Solicitando permiso USB.")
     }
 
     private fun connectLocked(device: UsbDevice): Boolean {
@@ -145,8 +175,7 @@ class UsbKeyboardLedMotorController(
             return false
         }
         if (!usbManager.hasPermission(device)) {
-            usbManager.requestPermission(device, permissionIntent)
-            onStatus("Solicitando permiso USB.")
+            requestPermissionLocked(device)
             return false
         }
         val opened = usbManager.openDevice(device) ?: run {
@@ -158,7 +187,7 @@ class UsbKeyboardLedMotorController(
             onStatus("No se pudo tomar control del teclado USB.")
             return false
         }
-
+        permissionRequestDeviceId = null
         connection = opened
         keyboardInterface = target.usbInterface
         interruptOutEndpoint = target.outEndpoint
@@ -185,13 +214,11 @@ class UsbKeyboardLedMotorController(
         val currentConnection = connection ?: return false
         val currentInterface = keyboardInterface ?: return false
         val value = (mask and 0b111).toByte()
-
         val controlReports = arrayOf(
             (HID_OUTPUT_REPORT shl 8) to byteArrayOf(value),
             ((HID_OUTPUT_REPORT shl 8) or 1) to byteArrayOf(value),
             ((HID_OUTPUT_REPORT shl 8) or 1) to byteArrayOf(1, value)
         )
-
         for ((reportValue, data) in controlReports) {
             val sent = currentConnection.controlTransfer(
                 HID_CLASS_OUT,
@@ -204,7 +231,6 @@ class UsbKeyboardLedMotorController(
             )
             if (sent == data.size) return true
         }
-
         val endpoint = interruptOutEndpoint ?: run {
             onStatus("No se pudo enviar reporte HID.")
             return false
@@ -216,9 +242,10 @@ class UsbKeyboardLedMotorController(
         for (report in endpointReports) {
             val packet = ByteArray(maxOf(endpoint.maxPacketSize, report.size))
             report.copyInto(packet)
-            if (currentConnection.bulkTransfer(endpoint, packet, packet.size, USB_TIMEOUT_MS) >= report.size) return true
+            if (currentConnection.bulkTransfer(endpoint, packet, packet.size, USB_TIMEOUT_MS) >= report.size) {
+                return true
+            }
         }
-
         onStatus("No se pudo enviar reporte HID.")
         return false
     }
@@ -251,7 +278,6 @@ class UsbKeyboardLedMotorController(
             .mapNotNull { findKeyboardTarget(it) }
             .firstOrNull { it.usbInterface.interfaceProtocol == USB_INTERFACE_PROTOCOL_KEYBOARD }
             ?.let { return it }
-
         return usbManager.deviceList.values.mapNotNull { findKeyboardTarget(it) }.firstOrNull()
     }
 
@@ -290,13 +316,12 @@ class UsbKeyboardLedMotorController(
         receiverRegistered = true
     }
 
-    private fun MechbotCommand.toLedMask(): Int? = when (this) {
-        MechbotCommand.STOP -> 0b000
-        MechbotCommand.FORWARD -> 0b001
-        MechbotCommand.BACKWARD -> 0b010
-        MechbotCommand.LEFT -> 0b011
-        MechbotCommand.RIGHT -> 0b100
-        else -> null
+    private fun MovementCommand.toLedMask(): Int = when (this) {
+        MovementCommand.STOP -> 0b000
+        MovementCommand.FORWARD -> 0b001
+        MovementCommand.BACKWARD -> 0b010
+        MovementCommand.LEFT -> 0b011
+        MovementCommand.RIGHT -> 0b100
     }
 
     @Suppress("DEPRECATION")

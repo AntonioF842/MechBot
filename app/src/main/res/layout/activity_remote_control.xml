@@ -1,0 +1,625 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_app">
+
+    <ScrollView
+        android:id="@+id/mainScroll"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnBack"
+                    android:layout_width="56dp"
+                    android:layout_height="48dp"
+                    android:contentDescription="Regresar"
+                    android:gravity="center"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:minHeight="0dp"
+                    android:padding="0dp"
+                    android:text=""
+                    app:cornerRadius="16dp"
+                    app:icon="@drawable/ic_arrow_back"
+                    app:iconGravity="textStart"
+                    app:iconPadding="0dp"
+                    app:iconSize="24dp"
+                    app:iconTint="@color/text_primary" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Control remoto"
+                        android:textColor="@color/text_primary"
+                        android:textSize="24sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Conexión entre dos teléfonos mediante Wi‑Fi Direct"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                app:cardBackgroundColor="@color/surface"
+                app:cardCornerRadius="20dp"
+                app:cardElevation="0dp"
+                app:strokeColor="@color/stroke"
+                app:strokeWidth="1dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:id="@+id/txtStatus"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Selecciona el uso de este teléfono"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <HorizontalScrollView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:id="@+id/txtWifiState"
+                                android:layout_width="88dp"
+                                android:layout_height="34dp"
+                                android:background="@drawable/bg_chip_idle"
+                                android:gravity="center"
+                                android:text="Wi‑Fi"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="10sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/txtUsbState"
+                                android:layout_width="82dp"
+                                android:layout_height="34dp"
+                                android:layout_marginStart="6dp"
+                                android:background="@drawable/bg_chip_idle"
+                                android:gravity="center"
+                                android:text="USB"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="10sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/txtVideoState"
+                                android:layout_width="88dp"
+                                android:layout_height="34dp"
+                                android:layout_marginStart="6dp"
+                                android:background="@drawable/bg_chip_idle"
+                                android:gravity="center"
+                                android:text="Video"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="10sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/txtDetectionState"
+                                android:layout_width="108dp"
+                                android:layout_height="34dp"
+                                android:layout_marginStart="6dp"
+                                android:background="@drawable/bg_chip_idle"
+                                android:gravity="center"
+                                android:text="Detección off"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="10sp"
+                                android:textStyle="bold" />
+                        </LinearLayout>
+                    </HorizontalScrollView>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnControllerMode"
+                    android:layout_width="0dp"
+                    android:layout_height="54dp"
+                    android:layout_weight="1"
+                    android:text="Controlador"
+                    android:textAllCaps="false"
+                    android:textStyle="bold"
+                    app:cornerRadius="18dp" />
+
+                <Space
+                    android:layout_width="10dp"
+                    android:layout_height="1dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnRobotMode"
+                    android:layout_width="0dp"
+                    android:layout_height="54dp"
+                    android:layout_weight="1"
+                    android:text="Robot"
+                    android:textAllCaps="false"
+                    android:textStyle="bold"
+                    app:cornerRadius="18dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/controllerPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="Conexión"
+                            android:textColor="@color/text_primary"
+                            android:textSize="18sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/txtPeerCount"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:text="Sin dispositivos"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="12sp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnDiscover"
+                                android:layout_width="0dp"
+                                android:layout_height="50dp"
+                                android:layout_weight="1"
+                                android:text="Buscar"
+                                android:textAllCaps="false"
+                                app:cornerRadius="16dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnConnectPeer"
+                                android:layout_width="0dp"
+                                android:layout_height="50dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="Conectar"
+                                android:textAllCaps="false"
+                                app:cornerRadius="16dp" />
+                        </LinearLayout>
+
+                        <Spinner
+                            android:id="@+id/spinnerPeers"
+                            android:layout_width="match_parent"
+                            android:layout_height="50dp"
+                            android:layout_marginTop="8dp"
+                            android:background="@drawable/bg_spinner"
+                            android:paddingStart="12dp"
+                            android:paddingEnd="12dp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnDisconnectPeer"
+                            android:layout_width="match_parent"
+                            android:layout_height="50dp"
+                            android:layout_marginTop="8dp"
+                            android:enabled="false"
+                            android:text="Desconectar"
+                            android:textAllCaps="false"
+                            app:backgroundTint="@color/danger"
+                            app:cornerRadius="16dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Video remoto"
+                                android:textColor="@color/text_primary"
+                                android:textSize="18sp"
+                                android:textStyle="bold" />
+
+                            <com.google.android.material.switchmaterial.SwitchMaterial
+                                android:id="@+id/switchRemoteDetection"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Detección"
+                                android:textColor="@color/text_primary" />
+                        </LinearLayout>
+
+                        <FrameLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="240dp"
+                            android:layout_marginTop="10dp"
+                            android:background="@drawable/bg_video">
+
+                            <ImageView
+                                android:id="@+id/imgRemoteCamera"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent"
+                                android:contentDescription="Video remoto"
+                                android:scaleType="fitCenter" />
+
+                            <com.mechrobotix.mechbot.DetectionOverlayView
+                                android:id="@+id/detectionOverlay"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent" />
+
+                            <TextView
+                                android:id="@+id/txtDetectionSummary"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="bottom|start"
+                                android:layout_margin="8dp"
+                                android:background="@drawable/bg_chip_idle"
+                                android:maxWidth="300dp"
+                                android:padding="7dp"
+                                android:text="Detección desactivada"
+                                android:textColor="@color/text_primary"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="10dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnStartVideo"
+                                android:layout_width="0dp"
+                                android:layout_height="50dp"
+                                android:layout_weight="1"
+                                android:text="Iniciar video"
+                                android:textAllCaps="false"
+                                app:cornerRadius="16dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnStopVideo"
+                                android:layout_width="0dp"
+                                android:layout_height="50dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_weight="1"
+                                android:text="Detener video"
+                                android:textAllCaps="false"
+                                app:cornerRadius="16dp" />
+                        </LinearLayout>
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_horizontal"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center"
+                            android:text="Movimiento remoto"
+                            android:textColor="@color/text_primary"
+                            android:textSize="18sp"
+                            android:textStyle="bold" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnForward"
+                            android:layout_width="88dp"
+                            android:layout_height="60dp"
+                            android:layout_marginTop="10dp"
+                            android:text="▲"
+                            android:textSize="24sp"
+                            app:cornerRadius="20dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="5dp"
+                            android:gravity="center"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnLeft"
+                                android:layout_width="88dp"
+                                android:layout_height="60dp"
+                                android:text="◀"
+                                android:textSize="24sp"
+                                app:cornerRadius="20dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnStop"
+                                android:layout_width="100dp"
+                                android:layout_height="60dp"
+                                android:layout_marginStart="8dp"
+                                android:layout_marginEnd="8dp"
+                                android:text="STOP"
+                                android:textStyle="bold"
+                                app:backgroundTint="@color/danger"
+                                app:cornerRadius="20dp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnRight"
+                                android:layout_width="88dp"
+                                android:layout_height="60dp"
+                                android:text="▶"
+                                android:textSize="24sp"
+                                app:cornerRadius="20dp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnBackward"
+                            android:layout_width="88dp"
+                            android:layout_height="60dp"
+                            android:layout_marginTop="5dp"
+                            android:text="▼"
+                            android:textSize="24sp"
+                            app:cornerRadius="20dp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/robotPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    app:cardBackgroundColor="@color/surface"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="14dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal">
+
+                            <TextView
+                                android:layout_width="0dp"
+                                android:layout_height="wrap_content"
+                                android:layout_weight="1"
+                                android:text="Modo robot"
+                                android:textColor="@color/text_primary"
+                                android:textSize="18sp"
+                                android:textStyle="bold" />
+
+                        </LinearLayout>
+
+                        <com.mechrobotix.mechbot.RobotEyesView
+                            android:id="@+id/robotEyes"
+                            android:layout_width="match_parent"
+                            android:layout_height="300dp"
+                            android:layout_marginTop="10dp"
+                            android:background="@drawable/bg_video" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnFullEyes"
+                            android:layout_width="match_parent"
+                            android:layout_height="52dp"
+                            android:layout_marginTop="10dp"
+                            android:text="Pantalla completa"
+                            android:textAllCaps="false"
+                            app:cornerRadius="16dp" />
+
+                        <TextView
+                            android:id="@+id/txtRobotHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:gravity="center"
+                            android:text="Esperando controlador"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnRobotTests"
+                    android:layout_width="match_parent"
+                    android:layout_height="52dp"
+                    android:layout_marginTop="12dp"
+                    android:text="Pruebas sin conexión"
+                    android:textAllCaps="false"
+                    app:cornerRadius="16dp" />
+
+                <LinearLayout
+                    android:id="@+id/robotTestControls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:gravity="center_horizontal"
+                    android:orientation="vertical"
+                    android:padding="12dp"
+                    android:visibility="gone">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnTestForward"
+                        android:layout_width="88dp"
+                        android:layout_height="60dp"
+                        android:text="▲"
+                        android:textSize="24sp"
+                        app:cornerRadius="20dp" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:gravity="center"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnTestLeft"
+                            android:layout_width="88dp"
+                            android:layout_height="60dp"
+                            android:text="◀"
+                            android:textSize="24sp"
+                            app:cornerRadius="20dp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnTestStop"
+                            android:layout_width="100dp"
+                            android:layout_height="60dp"
+                            android:layout_marginStart="8dp"
+                            android:layout_marginEnd="8dp"
+                            android:text="STOP"
+                            android:textStyle="bold"
+                            app:backgroundTint="@color/danger"
+                            app:cornerRadius="20dp" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnTestRight"
+                            android:layout_width="88dp"
+                            android:layout_height="60dp"
+                            android:text="▶"
+                            android:textSize="24sp"
+                            app:cornerRadius="20dp" />
+                    </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnTestBackward"
+                        android:layout_width="88dp"
+                        android:layout_height="60dp"
+                        android:layout_marginTop="5dp"
+                        android:text="▼"
+                        android:textSize="24sp"
+                        app:cornerRadius="20dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+
+    <FrameLayout
+        android:id="@+id/fullEyesOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <com.mechrobotix.mechbot.RobotEyesView
+            android:id="@+id/robotEyesFull"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#000000" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnExitFullEyes"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="16dp"
+            android:text="Salir"
+            android:textAllCaps="false"
+            app:cornerRadius="16dp" />
+    </FrameLayout>
+</FrameLayout>

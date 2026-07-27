@@ -7,33 +7,47 @@ import androidx.camera.core.ImageProxy
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 
-object YuvImageConverter {
-    fun imageProxyToJpeg(image: ImageProxy, quality: Int = 45): ByteArray {
-        val nv21 = yuv420ToNv21(image)
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, image.width, image.height), quality, out)
-        return out.toByteArray()
+data class YuvFrameData(
+    val nv21: ByteArray,
+    val width: Int,
+    val height: Int,
+    val rotationDegrees: Int,
+    val mirrored: Boolean
+)
+
+object YuvFrameEncoder {
+    fun copyFrame(image: ImageProxy, mirrored: Boolean): YuvFrameData = YuvFrameData(
+        nv21 = yuv420ToNv21(image),
+        width = image.width,
+        height = image.height,
+        rotationDegrees = image.imageInfo.rotationDegrees,
+        mirrored = mirrored
+    )
+
+    fun encodeJpeg(frame: YuvFrameData, quality: Int = 54): ByteArray {
+        val yuvImage = YuvImage(frame.nv21, ImageFormat.NV21, frame.width, frame.height, null)
+        val output = ByteArrayOutputStream()
+        if (!yuvImage.compressToJpeg(Rect(0, 0, frame.width, frame.height), quality, output)) {
+            throw IllegalStateException("No se pudo comprimir el frame")
+        }
+        return output.toByteArray()
     }
 
     private fun yuv420ToNv21(image: ImageProxy): ByteArray {
         val yPlane = image.planes[0]
         val uPlane = image.planes[1]
         val vPlane = image.planes[2]
-
         val width = image.width
         val height = image.height
         val nv21 = ByteArray(width * height * 3 / 2)
-
         copyPlane(yPlane.buffer, yPlane.rowStride, yPlane.pixelStride, width, height, nv21, 0, 1)
         copyPlane(vPlane.buffer, vPlane.rowStride, vPlane.pixelStride, width / 2, height / 2, nv21, width * height, 2)
         copyPlane(uPlane.buffer, uPlane.rowStride, uPlane.pixelStride, width / 2, height / 2, nv21, width * height + 1, 2)
-
         return nv21
     }
 
     private fun copyPlane(
-        buffer: ByteBuffer,
+        source: ByteBuffer,
         rowStride: Int,
         pixelStride: Int,
         width: Int,
@@ -42,24 +56,16 @@ object YuvImageConverter {
         offset: Int,
         outputPixelStride: Int
     ) {
-        val row = ByteArray(rowStride)
+        val buffer = source.duplicate().apply { rewind() }
         var outputOffset = offset
-        buffer.rewind()
         for (rowIndex in 0 until height) {
-            val bytesPerRow = if (pixelStride == 1 && outputPixelStride == 1) width else rowStride
-            val length = minOf(bytesPerRow, buffer.remaining())
-            buffer.get(row, 0, length)
-            var inputOffset = 0
-            for (col in 0 until width) {
-                if (outputOffset < output.size && inputOffset < length) {
-                    output[outputOffset] = row[inputOffset]
+            val rowStart = rowIndex * rowStride
+            for (columnIndex in 0 until width) {
+                val sourceIndex = rowStart + columnIndex * pixelStride
+                if (sourceIndex < buffer.limit() && outputOffset < output.size) {
+                    output[outputOffset] = buffer.get(sourceIndex)
                 }
                 outputOffset += outputPixelStride
-                inputOffset += pixelStride
-            }
-            if (rowIndex < height - 1) {
-                val skip = rowStride - length
-                if (skip > 0 && buffer.remaining() >= skip) buffer.position(buffer.position() + skip)
             }
         }
     }

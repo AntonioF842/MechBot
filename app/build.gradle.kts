@@ -14,8 +14,9 @@ android {
         applicationId = "com.mechrobotix.mechbot"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "2.1"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -33,11 +34,17 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.activity.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.camera.camera2)
-    implementation(libs.androidx.camera.core)
-    implementation(libs.androidx.camera.lifecycle)
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.material)
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.activity:activity-ktx:1.12.4")
+    implementation("androidx.camera:camera-core:1.6.1")
+    implementation("androidx.camera:camera-camera2:1.6.1")
+    implementation("androidx.camera:camera-lifecycle:1.6.1")
+    implementation("androidx.camera:camera-view:1.6.1")
+    implementation("com.google.mlkit:object-detection:17.0.2")
+
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.junit)
 }

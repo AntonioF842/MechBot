@@ -89,10 +89,18 @@ class WifiDirectController(
         }
     }
 
-    fun removeGroup() {
+    fun removeGroup(onResult: (Boolean) -> Unit = {}) {
         manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() = callbacks.onStatus("Grupo Wi‑Fi Direct eliminado.")
-            override fun onFailure(reason: Int) = callbacks.onStatus("No se pudo eliminar grupo: $reason")
+            override fun onSuccess() {
+                callbacks.onStatus("Grupo Wi‑Fi Direct eliminado.")
+                callbacks.onDisconnected()
+                onResult(true)
+            }
+
+            override fun onFailure(reason: Int) {
+                callbacks.onStatus("No se pudo eliminar grupo: $reason")
+                onResult(false)
+            }
         })
     }
 

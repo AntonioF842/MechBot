@@ -14,4 +14,9 @@
     <color name="warning">#FFB020</color>
     <color name="danger">#E5484D</color>
     <color name="idle">#223040</color>
+    <color name="detection_very_close">#FF4D5A</color>
+    <color name="detection_close">#FF9F43</color>
+    <color name="detection_medium">#FFD166</color>
+    <color name="detection_far">#33D17A</color>
+    <color name="detection_very_far">#5CC8FF</color>
 </resources>

@@ -24,14 +24,13 @@ class RobotEyesView @JvmOverloads constructor(
     private var pupilY = 0f
     private var animator: ValueAnimator? = null
 
-    fun react(command: MechbotCommand) {
+    fun react(command: MovementCommand) {
         val target = when (command) {
-            MechbotCommand.FORWARD -> 0f to -1f
-            MechbotCommand.BACKWARD -> 0f to 1f
-            MechbotCommand.LEFT -> -1f to 0f
-            MechbotCommand.RIGHT -> 1f to 0f
-            MechbotCommand.STOP -> 0f to 0f
-            else -> pupilX to pupilY
+            MovementCommand.FORWARD -> 0f to -1f
+            MovementCommand.BACKWARD -> 0f to 1f
+            MovementCommand.LEFT -> -1f to 0f
+            MovementCommand.RIGHT -> 1f to 0f
+            MovementCommand.STOP -> 0f to 0f
         }
         animateTo(target.first, target.second)
     }

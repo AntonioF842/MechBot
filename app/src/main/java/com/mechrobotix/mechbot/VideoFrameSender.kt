@@ -3,43 +3,37 @@ package com.mechrobotix.mechbot
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Handler
 import android.os.Looper
-import java.io.BufferedReader
-import java.io.BufferedWriter
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
+import java.io.BufferedOutputStream
+import java.io.DataOutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-class P2pSocketLink(
-    private val onStatus: (String) -> Unit,
-    private val onMessage: (String) -> Unit,
-    private val onConnectionChanged: (Boolean) -> Unit
-) {
+class VideoFrameSender(private val onStatus: (String) -> Unit) {
     private val main = Handler(Looper.getMainLooper())
-    private val sendExecutor = Executors.newSingleThreadExecutor()
+    private val frames = LinkedBlockingQueue<VideoFramePacket>(1)
     private val lock = Any()
     private var serverSocket: ServerSocket? = null
     private var socket: Socket? = null
-    private var writer: BufferedWriter? = null
+    private var output: DataOutputStream? = null
     @Volatile private var running = false
-    @Volatile private var connected = false
     @Volatile private var sessionId = 0L
 
     fun start(info: WifiP2pInfo) {
         stop()
         running = true
         val session = ++sessionId
-        thread(name = "mechbot-command-socket") {
+        thread(name = "mechbot-video-sender") {
             var localServer: ServerSocket? = null
             var localSocket: Socket? = null
-            var localWriter: BufferedWriter? = null
+            var localOutput: DataOutputStream? = null
             try {
                 val activeSocket = if (info.isGroupOwner) {
-                    postStatus("Esperando socket de comandos en puerto $COMMAND_PORT...")
-                    ServerSocket(COMMAND_PORT).also {
+                    postStatus("Video: esperando receptor en puerto $VIDEO_PORT...")
+                    ServerSocket(VIDEO_PORT).also {
                         it.reuseAddress = true
                         localServer = it
                         synchronized(lock) {
@@ -48,96 +42,68 @@ class P2pSocketLink(
                     }.accept()
                 } else {
                     val host = info.groupOwnerAddress.hostAddress ?: return@thread
-                    postStatus("Conectando socket de comandos a $host:$COMMAND_PORT...")
-                    connectWithRetry(host, COMMAND_PORT, session)
+                    postStatus("Video: conectando a $host:$VIDEO_PORT...")
+                    connectWithRetry(host, VIDEO_PORT, session)
                 }
                 localSocket = activeSocket
                 if (!running || session != sessionId) return@thread
                 activeSocket.tcpNoDelay = true
                 activeSocket.keepAlive = true
-                localWriter = BufferedWriter(OutputStreamWriter(activeSocket.getOutputStream()))
+                activeSocket.sendBufferSize = 256 * 1024
+                val stream = DataOutputStream(BufferedOutputStream(activeSocket.getOutputStream(), 128 * 1024))
+                localOutput = stream
                 synchronized(lock) {
                     if (session == sessionId) {
                         socket = activeSocket
-                        writer = localWriter
-                        connected = true
+                        output = stream
                     }
                 }
-                postStatus("Socket de comandos conectado.")
-                postConnection(true)
-                val reader = BufferedReader(InputStreamReader(activeSocket.getInputStream()))
+                postStatus("Video: enlace listo.")
                 while (running && session == sessionId) {
-                    val line = reader.readLine() ?: break
-                    main.post {
-                        if (running && session == sessionId) onMessage(line)
-                    }
+                    val frame = frames.poll(500, TimeUnit.MILLISECONDS) ?: continue
+                    VideoProtocol.write(stream, frame)
+                    stream.flush()
                 }
             } catch (error: Exception) {
-                if (running && session == sessionId) postStatus("Error en socket de comandos: ${error.message}")
+                if (running && session == sessionId) postStatus("Video: error sender ${error.message}")
             } finally {
-                runCatching { localWriter?.close() }
+                runCatching { localOutput?.close() }
                 runCatching { localSocket?.close() }
                 runCatching { localServer?.close() }
-                var notify = false
                 synchronized(lock) {
                     if (session == sessionId) {
-                        notify = connected
-                        connected = false
-                        writer = null
+                        output = null
                         socket = null
                         serverSocket = null
                     }
                 }
-                if (notify) postConnection(false)
             }
         }
     }
 
-    fun sendLine(line: String): Boolean {
-        if (!connected) return false
-        sendExecutor.execute {
-            try {
-                synchronized(lock) {
-                    writer?.apply {
-                        write(line)
-                        newLine()
-                        flush()
-                    }
-                }
-            } catch (error: Exception) {
-                postStatus("No se pudo enviar comando: ${error.message}")
-            }
-        }
-        return true
+    fun sendFrame(frame: VideoFramePacket) {
+        if (!running) return
+        frames.clear()
+        frames.offer(frame)
     }
-
-    fun isConnected(): Boolean = connected
 
     fun stop() {
         running = false
         sessionId++
-        var notify = false
+        frames.clear()
         synchronized(lock) {
-            notify = connected
-            connected = false
-            runCatching { writer?.close() }
+            runCatching { output?.close() }
             runCatching { socket?.close() }
             runCatching { serverSocket?.close() }
-            writer = null
+            output = null
             socket = null
             serverSocket = null
         }
-        if (notify) postConnection(false)
-    }
-
-    fun close() {
-        stop()
-        sendExecutor.shutdownNow()
     }
 
     private fun connectWithRetry(host: String, port: Int, session: Long): Socket {
         var lastError: Exception? = null
-        repeat(20) {
+        repeat(30) {
             if (!running || session != sessionId) throw IllegalStateException("Conexión cancelada")
             try {
                 return Socket().apply { connect(InetSocketAddress(host, port), 1500) }
@@ -146,14 +112,12 @@ class P2pSocketLink(
                 Thread.sleep(500)
             }
         }
-        throw lastError ?: IllegalStateException("No se pudo conectar")
+        throw lastError ?: IllegalStateException("No se pudo conectar video")
     }
 
     private fun postStatus(message: String) = main.post { onStatus(message) }
 
-    private fun postConnection(value: Boolean) = main.post { onConnectionChanged(value) }
-
     companion object {
-        const val COMMAND_PORT = 8988
+        const val VIDEO_PORT = 8989
     }
 }
