@@ -274,6 +274,7 @@ class DirectControlActivity : AppCompatActivity() {
                     "no se pudo tomar control" in lower ||
                     "no expone teclado hid" in lower ||
                     "pero no teclado hid" in lower ||
+                    "no declara soporte usb host" in lower ||
                     "no se pudo enviar reporte hid" in lower -> {
                     txtUsbState.setChip("USB error", ChipState.ERROR)
                     clearActiveMovement()

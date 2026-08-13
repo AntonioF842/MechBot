@@ -76,7 +76,7 @@ La aplicación envía una orden de parada en varias situaciones:
 - Gradle `9.5.0`, incluido mediante Gradle Wrapper.
 - JDK `21` recomendado y configurado para el daemon de Gradle.
 - Android SDK `36.1` instalado.
-- Android 7.0 o superior (`minSdk 24`).
+- Android 7.0 a 9.0 (`minSdk 24`).
 - Para el modo remoto: dos dispositivos Android con Wi‑Fi Direct.
 - Para controlar motores: un dispositivo Android con USB Host y hardware HID compatible.
 

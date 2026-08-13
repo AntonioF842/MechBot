@@ -1,6 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <usb-device class="3" subclass="1" protocol="1" />
-    <usb-device class="3" subclass="0" protocol="0" />
-    <usb-device class="3" />
 </resources>

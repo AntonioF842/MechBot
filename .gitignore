@@ -7,25 +7,23 @@
 .kotlin/
 **/build/
 
-# Local Android SDK configuration
+# Local machine configuration
 local.properties
 
-# Native build output
+# Native build artifacts
 .externalNativeBuild/
 .cxx/
 
-# Captures and generated files
+# Captures and logs
 captures/
+*.log
 
-# Signing material
-*.jks
-*.keystore
-keystore.properties
-
-# Operating systems
+# OS files
 .DS_Store
 Thumbs.db
 
-# Environment files
+# Signing credentials and local environment files
+*.jks
+*.keystore
 .env
 .env.*
