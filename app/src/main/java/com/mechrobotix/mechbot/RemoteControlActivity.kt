@@ -70,6 +70,15 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var detectionOverlay: DetectionOverlayView
     private lateinit var switchRemoteDetection: SwitchMaterial
 
+    // --- NUEVAS VISTAS Y VARIABLES PARA MÉTRICAS DE RED ---
+    private lateinit var txtFpsMeter: TextView
+    private lateinit var txtLatencyMeter: TextView
+
+    private var frameCounter = 0
+    private var lastFpsTimestamp = 0L
+    private var lastPingSentTimestamp = 0L
+    // ----------------------------------------------------
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private var role = Role.NONE
     private var isEyesFullscreen = false
@@ -102,6 +111,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
             if (role == Role.CONTROLLER && socketLink.isConnected()) {
+                // Registrar el tiempo de envío antes de emitir la señal por socket
+                lastPingSentTimestamp = SystemClock.elapsedRealtime()
                 socketLink.sendLine(RemoteMessage.Ping.toWire())
                 mainHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
             }
@@ -223,6 +234,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         imgRemoteCamera = findViewById(R.id.imgRemoteCamera)
         detectionOverlay = findViewById(R.id.detectionOverlay)
         switchRemoteDetection = findViewById(R.id.switchRemoteDetection)
+
+        txtFpsMeter = findViewById(R.id.txtFpsMeter)
+        txtLatencyMeter = findViewById(R.id.txtLatencyMeter)
     }
 
     private fun bindUi() {
@@ -469,8 +483,18 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         val remoteMessage = RemoteMessage.fromWire(message) ?: return
         when (role) {
             Role.ROBOT -> handleRobotMessage(remoteMessage)
-            Role.CONTROLLER -> if (remoteMessage is RemoteMessage.DetectionState) {
-                setDetectionState(remoteMessage.enabled, false)
+            Role.CONTROLLER -> {
+                when (remoteMessage) {
+                    is RemoteMessage.DetectionState -> setDetectionState(remoteMessage.enabled, false)
+                    RemoteMessage.Ping -> {
+                        // Calcular RTT (Round Trip Time) cuando el Robot responde con un Ping
+                        val rtt = SystemClock.elapsedRealtime() - lastPingSentTimestamp
+                        runOnUiThread {
+                            txtLatencyMeter.text = "Ping: ${rtt} ms"
+                        }
+                    }
+                    else -> Unit
+                }
             }
             Role.NONE -> Unit
         }
@@ -488,7 +512,10 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             RemoteMessage.DetectionOn -> setDetectionState(true, true)
             RemoteMessage.DetectionOff -> setDetectionState(false, true)
             is RemoteMessage.DetectionState -> Unit
-            RemoteMessage.Ping -> Unit
+            RemoteMessage.Ping -> {
+                // Responder al Ping del Controlador para completar la vuelta del paquete
+                sendRemoteMessage(RemoteMessage.Ping)
+            }
         }
     }
 
@@ -620,6 +647,18 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun showRemoteFrame(frame: RemoteVideoFrame) {
+        // Cálculo y actualización de FPS
+        frameCounter++
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFpsTimestamp >= 1000L) {
+            val fps = frameCounter
+            frameCounter = 0
+            lastFpsTimestamp = now
+            runOnUiThread {
+                txtFpsMeter.text = "FPS: $fps"
+            }
+        }
+
         val previous = remoteBitmap
         remoteBitmap = frame.bitmap
         imgRemoteCamera.setImageBitmap(frame.bitmap)

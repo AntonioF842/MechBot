@@ -329,6 +329,36 @@
                                 android:layout_width="match_parent"
                                 android:layout_height="match_parent" />
 
+                            <!-- PANEL FLOTANTE DE MÉTRICAS DE RED (FPS Y LATENCIA/PING) -->
+                            <LinearLayout
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_gravity="top|end"
+                                android:layout_margin="8dp"
+                                android:background="@drawable/bg_chip_idle"
+                                android:orientation="horizontal"
+                                android:padding="6dp">
+
+                                <TextView
+                                    android:id="@+id/txtFpsMeter"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:text="FPS: --"
+                                    android:textColor="#00FF00"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold" />
+
+                                <TextView
+                                    android:id="@+id/txtLatencyMeter"
+                                    android:layout_width="wrap_content"
+                                    android:layout_height="wrap_content"
+                                    android:layout_marginStart="8dp"
+                                    android:text="Ping: -- ms"
+                                    android:textColor="#00E5FF"
+                                    android:textSize="11sp"
+                                    android:textStyle="bold" />
+                            </LinearLayout>
+
                             <TextView
                                 android:id="@+id/txtDetectionSummary"
                                 android:layout_width="wrap_content"
