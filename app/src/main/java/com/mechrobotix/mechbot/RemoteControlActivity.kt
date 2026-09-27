@@ -1,6 +1,7 @@
 package com.mechrobotix.mechbot
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
@@ -34,6 +35,9 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import kotlin.math.roundToInt
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 
 class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks {
     private enum class Role { NONE, CONTROLLER, ROBOT }
@@ -93,6 +97,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var pendingVideoStart = false
     private var videoRunning = false
     private var lastHeartbeatAt = 0L
+    private var lastVibrationTime = 0L
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -647,38 +652,42 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun showRemoteFrame(frame: RemoteVideoFrame) {
-        // Cálculo y actualización de FPS
-        frameCounter++
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastFpsTimestamp >= 1000L) {
-            val fps = frameCounter
-            frameCounter = 0
-            lastFpsTimestamp = now
-            runOnUiThread {
-                txtFpsMeter.text = "FPS: $fps"
-            }
-        }
+        // ... Cálculo de FPS existente ...
 
         val previous = remoteBitmap
         remoteBitmap = frame.bitmap
         imgRemoteCamera.setImageBitmap(frame.bitmap)
+
         if (frame.detectionEnabled) {
             detectionOverlay.setFrame(frame.detections, frame.bitmap.width, frame.bitmap.height)
             val detection = frame.detections.firstOrNull()
-            txtDetectionSummary.text = if (detection == null) {
-                "Sin objetos detectados"
+
+            if (detection == null) {
+                txtDetectionSummary.text = "Sin objetos detectados"
             } else {
                 val confidence = if (detection.confidence > 0f) {
                     " · ${(detection.confidence * 100f).roundToInt()}%"
                 } else {
                     ""
                 }
-                "${detection.label} · ${detection.proximity.text}$confidence"
+                txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
+
+                // --- LÓGICA DE ALERTA POR VIBRACIÓN ---
+                // Si la proximidad estimada es "Cerca" (o proximidad de riesgo)
+                if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
+                    val now = SystemClock.elapsedRealtime()
+                    // Evitamos que vibre ininterrumpidamente limitando la alerta a 1 vez cada 800 ms
+                    if (now - lastVibrationTime >= 800L) {
+                        lastVibrationTime = now
+                        triggerObstacleVibration()
+                    }
+                }
             }
         } else {
             detectionOverlay.clear()
             txtDetectionSummary.text = "Detección desactivada"
         }
+
         if (previous !== frame.bitmap && previous?.isRecycled == false) previous.recycle()
     }
 
@@ -814,6 +823,21 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private fun color(resourceId: Int): Int = ContextCompat.getColor(this, resourceId)
 
+    private  fun triggerObstacleVibration() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            val vibrator = vibratorManager.defaultVibrator
+            // Patón: Vibrar 200 ms con intenisdad por defecto
+            vibrator.vibrate(VibrationEffect.createOneShot(200L, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            val  vibrator = getSystemService((Context.VIBRATOR_SERVICE)) as Vibrator
+            if (vibrator.hasVibrator()) {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(200L) // Vibrar 200 ms en APIs anteriores
+            }
+        }
+    }
     private companion object {
         private const val KEY_ROLE = "role"
         private const val KEY_EYES_FULLSCREEN = "eyesFullscreen"

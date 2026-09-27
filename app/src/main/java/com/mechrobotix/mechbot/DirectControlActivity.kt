@@ -1,10 +1,16 @@
 package com.mechrobotix.mechbot
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -39,6 +45,9 @@ class DirectControlActivity : AppCompatActivity() {
     private lateinit var cameraController: LocalCameraController
     private var activeMovementButtonId = View.NO_ID
     private var cameraPermissionRequestInProgress = false
+
+    // Control de tiempo para limitar la frecuencia de vibración
+    private var lastVibrationTime = 0L
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -247,6 +256,32 @@ class DirectControlActivity : AppCompatActivity() {
                 ""
             }
             txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
+
+            // --- LÓGICA DE ALERTA HÁPTICA POR VIBRACIÓN ---
+            if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
+                val now = SystemClock.elapsedRealtime()
+                // Evitamos vibración continua espaciando el pulso cada 800 ms
+                if (now - lastVibrationTime >= 800L) {
+                    lastVibrationTime = now
+                    triggerObstacleVibration()
+                }
+            }
+        }
+    }
+
+    // --- MÉTODOS AUXILIARES PARA EL MANEJO DE VIBRACIÓN ---
+    private fun triggerObstacleVibration() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
+            val vibrator = vibratorManager.defaultVibrator
+            vibrator.vibrate(VibrationEffect.createOneShot(200L, VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION")
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+            if (vibrator.hasVibrator()) {
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(200L)
+            }
         }
     }
 
@@ -270,12 +305,12 @@ class DirectControlActivity : AppCompatActivity() {
                     clearActiveMovement()
                 }
                 "permiso usb denegado" in lower ||
-                    "no se pudo abrir el teclado usb" in lower ||
-                    "no se pudo tomar control" in lower ||
-                    "no expone teclado hid" in lower ||
-                    "pero no teclado hid" in lower ||
-                    "no declara soporte usb host" in lower ||
-                    "no se pudo enviar reporte hid" in lower -> {
+                        "no se pudo abrir el teclado usb" in lower ||
+                        "no se pudo tomar control" in lower ||
+                        "no expone teclado hid" in lower ||
+                        "pero no teclado hid" in lower ||
+                        "no declara soporte usb host" in lower ||
+                        "no se pudo enviar reporte hid" in lower -> {
                     txtUsbState.setChip("USB error", ChipState.ERROR)
                     clearActiveMovement()
                 }
