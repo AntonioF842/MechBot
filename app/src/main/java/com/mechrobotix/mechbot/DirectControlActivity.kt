@@ -41,8 +41,11 @@ class DirectControlActivity : AppCompatActivity() {
     private lateinit var btnLeft: MaterialButton
     private lateinit var btnRight: MaterialButton
     private lateinit var btnStop: MaterialButton
+    private lateinit var btnVoiceCommand: MaterialButton
     private lateinit var motorController: UsbKeyboardLedMotorController
     private lateinit var cameraController: LocalCameraController
+    private lateinit var voiceCommandHelper: VoiceCommandHelper
+
     private var activeMovementButtonId = View.NO_ID
     private var cameraPermissionRequestInProgress = false
 
@@ -62,6 +65,16 @@ class DirectControlActivity : AppCompatActivity() {
         }
     }
 
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            voiceCommandHelper.startListening()
+        } else {
+            setStatus("Permiso de micrófono denegado para comandos de voz.")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_direct_control)
@@ -74,6 +87,18 @@ class DirectControlActivity : AppCompatActivity() {
             onStatus = ::handleComponentStatus,
             onDetections = ::showDetections
         )
+
+        // Inicialización del Helper de Comandos de Voz
+        voiceCommandHelper = VoiceCommandHelper(
+            context = this,
+            onCommandDetected = { command ->
+                executeVoiceCommand(command)
+            },
+            onErrorOrStatus = { statusMessage ->
+                setStatus(statusMessage)
+            }
+        )
+
         switchDetection.isChecked = true
         bindControls()
         resetIndicators()
@@ -91,12 +116,14 @@ class DirectControlActivity : AppCompatActivity() {
 
     override fun onPause() {
         emergencyStop()
+        voiceCommandHelper.stopListening()
         super.onPause()
     }
 
     override fun onStop() {
         emergencyStop()
         cameraController.stop()
+        voiceCommandHelper.stopListening()
         super.onStop()
     }
 
@@ -114,6 +141,7 @@ class DirectControlActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         emergencyStop()
+        voiceCommandHelper.destroy()
         cameraController.close()
         motorController.close()
         super.onDestroy()
@@ -134,6 +162,7 @@ class DirectControlActivity : AppCompatActivity() {
         btnLeft = findViewById(R.id.btnLeft)
         btnRight = findViewById(R.id.btnRight)
         btnStop = findViewById(R.id.btnStop)
+        btnVoiceCommand = findViewById(R.id.btnVoiceCommand)
     }
 
     private fun bindControls() {
@@ -164,6 +193,33 @@ class DirectControlActivity : AppCompatActivity() {
             true
         }
         btnStop.setOnClickListener { emergencyStop("STOP activado.") }
+
+        btnVoiceCommand.setOnClickListener {
+            ensureAudioPermissionAndListen()
+        }
+    }
+
+    private fun ensureAudioPermissionAndListen() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceCommandHelper.startListening()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun executeVoiceCommand(command: MovementCommand) {
+        if (!motorController.isReady()) {
+            motorController.prepare()
+            setStatus("Conecta y autoriza el teclado HID antes de mover el robot.")
+            return
+        }
+        txtMovement.text = command.displayName
+        if (motorController.send(command)) {
+            setStatus("Comando de voz enviado: ${command.displayName}")
+        } else {
+            clearActiveMovement()
+            setStatus("No se pudo enviar el comando de voz al HID.")
+        }
     }
 
     private fun returnToMain() {

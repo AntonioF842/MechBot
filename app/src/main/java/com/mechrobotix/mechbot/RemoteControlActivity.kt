@@ -15,6 +15,9 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -35,9 +38,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 import kotlin.math.roundToInt
-import android.os.VibrationEffect
-import android.os.Vibrator
-import android.os.VibratorManager
 
 class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks {
     private enum class Role { NONE, CONTROLLER, ROBOT }
@@ -49,6 +49,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var frameSender: VideoFrameSender? = null
     private var cameraStreamer: RemoteCameraStreamer? = null
     private var motorController: UsbKeyboardLedMotorController? = null
+    private lateinit var voiceCommandHelper: VoiceCommandHelper
 
     private lateinit var txtStatus: TextView
     private lateinit var txtWifiState: TextView
@@ -66,6 +67,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var btnControllerMode: MaterialButton
     private lateinit var btnRobotMode: MaterialButton
     private lateinit var btnRobotTests: MaterialButton
+    private lateinit var btnRemoteVoice: MaterialButton
     private lateinit var robotTestControls: LinearLayout
     private lateinit var robotEyes: RobotEyesView
     private lateinit var robotEyesFull: RobotEyesView
@@ -74,14 +76,13 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var detectionOverlay: DetectionOverlayView
     private lateinit var switchRemoteDetection: SwitchMaterial
 
-    // --- NUEVAS VISTAS Y VARIABLES PARA MÉTRICAS DE RED ---
+    // MÉTRICAS DE RED
     private lateinit var txtFpsMeter: TextView
     private lateinit var txtLatencyMeter: TextView
 
     private var frameCounter = 0
     private var lastFpsTimestamp = 0L
     private var lastPingSentTimestamp = 0L
-    // ----------------------------------------------------
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var role = Role.NONE
@@ -113,10 +114,19 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         }
     }
 
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            voiceCommandHelper.startListening()
+        } else {
+            setStatus("Permiso de micrófono denegado para comandos de voz.")
+        }
+    }
+
     private val heartbeatRunnable = object : Runnable {
         override fun run() {
             if (role == Role.CONTROLLER && socketLink.isConnected()) {
-                // Registrar el tiempo de envío antes de emitir la señal por socket
                 lastPingSentTimestamp = SystemClock.elapsedRealtime()
                 socketLink.sendLine(RemoteMessage.Ping.toWire())
                 mainHandler.postDelayed(this, HEARTBEAT_INTERVAL_MS)
@@ -142,6 +152,21 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         bindViews()
         wifi = WifiDirectController(this, this)
         socketLink = P2pSocketLink(::setStatus, ::onSocketMessage, ::onSocketConnectionChanged)
+
+        // Inicializar reconocedor de voz
+        voiceCommandHelper = VoiceCommandHelper(
+            context = this,
+            onCommandDetected = { command ->
+                if (role == Role.CONTROLLER) {
+                    sendRemoteMessage(RemoteMessage.Movement(command))
+                    setStatus("Voz enviada: ${command.displayName}")
+                }
+            },
+            onErrorOrStatus = { msg ->
+                setStatus(msg)
+            }
+        )
+
         bindUi()
         resetIndicators()
         updatePeerSelector()
@@ -175,6 +200,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     override fun onPause() {
         stopHeartbeatAndWatchdog()
+        voiceCommandHelper.stopListening()
         if (role == Role.CONTROLLER) sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
         if (role == Role.ROBOT) emergencyRobotStop()
         super.onPause()
@@ -182,6 +208,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     override fun onStop() {
         wifi.unregister()
+        voiceCommandHelper.stopListening()
         super.onStop()
     }
 
@@ -208,6 +235,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     override fun onDestroy() {
         stopHeartbeatAndWatchdog()
         emergencyRobotStop()
+        voiceCommandHelper.destroy()
         socketLink.close()
         releaseControllerResources()
         releaseRobotResources()
@@ -232,6 +260,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         btnControllerMode = findViewById(R.id.btnControllerMode)
         btnRobotMode = findViewById(R.id.btnRobotMode)
         btnRobotTests = findViewById(R.id.btnRobotTests)
+        btnRemoteVoice = findViewById(R.id.btnRemoteVoice)
         robotTestControls = findViewById(R.id.robotTestControls)
         robotEyes = findViewById(R.id.robotEyes)
         robotEyesFull = findViewById(R.id.robotEyesFull)
@@ -256,6 +285,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         btnRobotTests.setOnClickListener { setRobotTestMode(!isRobotTestMode) }
         switchRemoteDetection.setOnCheckedChangeListener { _, enabled ->
             if (!updatingDetectionSwitches && role == Role.CONTROLLER) requestRemoteDetection(enabled)
+        }
+        btnRemoteVoice.setOnClickListener {
+            ensureAudioPermissionAndListen()
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -282,6 +314,14 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         }
         findViewById<Button>(R.id.btnStartVideo).setOnClickListener { startControllerVideo() }
         findViewById<Button>(R.id.btnStopVideo).setOnClickListener { stopControllerVideo() }
+    }
+
+    private fun ensureAudioPermissionAndListen() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceCommandHelper.startListening()
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     private fun returnToMain() {
@@ -492,7 +532,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 when (remoteMessage) {
                     is RemoteMessage.DetectionState -> setDetectionState(remoteMessage.enabled, false)
                     RemoteMessage.Ping -> {
-                        // Calcular RTT (Round Trip Time) cuando el Robot responde con un Ping
                         val rtt = SystemClock.elapsedRealtime() - lastPingSentTimestamp
                         runOnUiThread {
                             txtLatencyMeter.text = "Ping: ${rtt} ms"
@@ -517,10 +556,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             RemoteMessage.DetectionOn -> setDetectionState(true, true)
             RemoteMessage.DetectionOff -> setDetectionState(false, true)
             is RemoteMessage.DetectionState -> Unit
-            RemoteMessage.Ping -> {
-                // Responder al Ping del Controlador para completar la vuelta del paquete
-                sendRemoteMessage(RemoteMessage.Ping)
-            }
+            RemoteMessage.Ping -> sendRemoteMessage(RemoteMessage.Ping)
         }
     }
 
@@ -652,7 +688,16 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun showRemoteFrame(frame: RemoteVideoFrame) {
-        // ... Cálculo de FPS existente ...
+        frameCounter++
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFpsTimestamp >= 1000L) {
+            val fps = frameCounter
+            frameCounter = 0
+            lastFpsTimestamp = now
+            runOnUiThread {
+                txtFpsMeter.text = "FPS: $fps"
+            }
+        }
 
         val previous = remoteBitmap
         remoteBitmap = frame.bitmap
@@ -672,11 +717,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
                 txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
-                // --- LÓGICA DE ALERTA POR VIBRACIÓN ---
-                // Si la proximidad estimada es "Cerca" (o proximidad de riesgo)
                 if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
-                    val now = SystemClock.elapsedRealtime()
-                    // Evitamos que vibre ininterrumpidamente limitando la alerta a 1 vez cada 800 ms
                     if (now - lastVibrationTime >= 800L) {
                         lastVibrationTime = now
                         triggerObstacleVibration()
@@ -823,28 +864,28 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private fun color(resourceId: Int): Int = ContextCompat.getColor(this, resourceId)
 
-    private  fun triggerObstacleVibration() {
+    private fun triggerObstacleVibration() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
             val vibrator = vibratorManager.defaultVibrator
-            // Patón: Vibrar 200 ms con intenisdad por defecto
             vibrator.vibrate(VibrationEffect.createOneShot(200L, VibrationEffect.DEFAULT_AMPLITUDE))
         } else {
             @Suppress("DEPRECATION")
-            val  vibrator = getSystemService((Context.VIBRATOR_SERVICE)) as Vibrator
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
             if (vibrator.hasVibrator()) {
                 @Suppress("DEPRECATION")
-                vibrator.vibrate(200L) // Vibrar 200 ms en APIs anteriores
+                vibrator.vibrate(200L)
             }
         }
     }
+
     private companion object {
         private const val KEY_ROLE = "role"
         private const val KEY_EYES_FULLSCREEN = "eyesFullscreen"
         private const val KEY_ROBOT_TEST_MODE = "robotTestMode"
         private const val DISCONNECT_STOP_GRACE_MS = 180L
         private const val HEARTBEAT_INTERVAL_MS = 650L
-        private const val HEARTBEAT_TIMEOUT_MS = 1800L
+        private const val HEARTBEAT_TIMEOUT_MS = 1808L
         private const val WATCHDOG_INTERVAL_MS = 300L
     }
 }
