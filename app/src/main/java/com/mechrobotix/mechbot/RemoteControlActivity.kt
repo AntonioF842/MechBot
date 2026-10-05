@@ -153,7 +153,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         wifi = WifiDirectController(this, this)
         socketLink = P2pSocketLink(::setStatus, ::onSocketMessage, ::onSocketConnectionChanged)
 
-        // Inicializar reconocedor de voz
         voiceCommandHelper = VoiceCommandHelper(
             context = this,
             onCommandDetected = { command ->
@@ -717,10 +716,18 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
                 txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
+                // --- LÓGICA DE ALERTA HÁPTICA Y FRENO AUTÓNOMO REMOTO ---
                 if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
+                    // 1. Alerta por vibración en el controlador
                     if (now - lastVibrationTime >= 800L) {
                         lastVibrationTime = now
                         triggerObstacleVibration()
+                    }
+
+                    // 2. Freno Autónomo: Forzamos la parada de emergencia en el robot a distancia
+                    if (role == Role.CONTROLLER && socketLink.isConnected()) {
+                        sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
+                        setStatus("Detenido por objeto cercano")
                     }
                 }
             }

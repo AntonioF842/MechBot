@@ -208,17 +208,16 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun executeVoiceCommand(command: MovementCommand) {
-        if (!motorController.isReady()) {
-            motorController.prepare()
-            setStatus("Conecta y autoriza el teclado HID antes de mover el robot.")
-            return
-        }
         txtMovement.text = command.displayName
-        if (motorController.send(command)) {
-            setStatus("Comando de voz enviado: ${command.displayName}")
+        if (motorController.isReady()) {
+            if (motorController.send(command)) {
+                setStatus("Comando de voz enviado al HID: ${command.displayName}")
+            } else {
+                clearActiveMovement()
+                setStatus("No se pudo enviar el comando de voz al HID.")
+            }
         } else {
-            clearActiveMovement()
-            setStatus("No se pudo enviar el comando de voz al HID.")
+            setStatus("Modo Prueba - Voz reconocida: ${command.displayName}")
         }
     }
 
@@ -313,19 +312,24 @@ class DirectControlActivity : AppCompatActivity() {
             }
             txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
-            // --- LÓGICA DE ALERTA HÁPTICA POR VIBRACIÓN ---
+            // --- LÓGICA DE ALERTA HÁPTICA Y FRENO AUTÓNOMO POR VISIÓN ---
             if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
                 val now = SystemClock.elapsedRealtime()
-                // Evitamos vibración continua espaciando el pulso cada 800 ms
+
+                // 1. Alerta por vibración
                 if (now - lastVibrationTime >= 800L) {
                     lastVibrationTime = now
                     triggerObstacleVibration()
+                }
+
+                // 2. Freno Autónomo de Emergencia
+                if (activeMovementButtonId != View.NO_ID) {
+                    emergencyStop("Detenido por objeto cercano")
                 }
             }
         }
     }
 
-    // --- MÉTODOS AUXILIARES PARA EL MANEJO DE VIBRACIÓN ---
     private fun triggerObstacleVibration() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
