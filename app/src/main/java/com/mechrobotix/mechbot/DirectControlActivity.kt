@@ -48,8 +48,6 @@ class DirectControlActivity : AppCompatActivity() {
 
     private var activeMovementButtonId = View.NO_ID
     private var cameraPermissionRequestInProgress = false
-
-    // Control de tiempo para limitar la frecuencia de vibración
     private var lastVibrationTime = 0L
 
     private val cameraPermissionLauncher = registerForActivityResult(
@@ -88,7 +86,6 @@ class DirectControlActivity : AppCompatActivity() {
             onDetections = ::showDetections
         )
 
-        // Inicialización del Helper de Comandos de Voz
         voiceCommandHelper = VoiceCommandHelper(
             context = this,
             onCommandDetected = { command ->
@@ -208,16 +205,13 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun executeVoiceCommand(command: MovementCommand) {
+        // Actualizar interfaz siempre sin depender de la conexión USB HID
         txtMovement.text = command.displayName
         if (motorController.isReady()) {
-            if (motorController.send(command)) {
-                setStatus("Comando de voz enviado al HID: ${command.displayName}")
-            } else {
-                clearActiveMovement()
-                setStatus("No se pudo enviar el comando de voz al HID.")
-            }
+            motorController.send(command)
+            setStatus("Comando de voz enviado al HID: ${command.displayName}")
         } else {
-            setStatus("Modo Prueba - Voz reconocida: ${command.displayName}")
+            setStatus("Voz reconocida: ${command.displayName}")
         }
     }
 
@@ -234,19 +228,14 @@ class DirectControlActivity : AppCompatActivity() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     if (activeMovementButtonId != View.NO_ID) return@setOnTouchListener true
-                    if (!motorController.isReady()) {
-                        motorController.prepare()
-                        setStatus("Conecta y autoriza el teclado HID antes de mover el robot.")
-                        return@setOnTouchListener true
-                    }
                     activeMovementButtonId = button.id
                     updateDirectionButtons()
-                    if (motorController.send(command)) {
-                        txtMovement.text = command.displayName
+                    txtMovement.text = command.displayName
+                    if (motorController.isReady()) {
+                        motorController.send(command)
                         setStatus("Movimiento: ${command.displayName}")
                     } else {
-                        clearActiveMovement()
-                        setStatus("No se pudo enviar el movimiento al HID.")
+                        setStatus("Movimiento manual: ${command.displayName}")
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -258,7 +247,9 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun emergencyStop(message: String? = null) {
-        motorController.send(MovementCommand.STOP)
+        if (motorController.isReady()) {
+            motorController.send(MovementCommand.STOP)
+        }
         clearActiveMovement()
         if (message != null) setStatus(message)
     }
@@ -312,17 +303,13 @@ class DirectControlActivity : AppCompatActivity() {
             }
             txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
-            // --- LÓGICA DE ALERTA HÁPTICA Y FRENO AUTÓNOMO POR VISIÓN ---
             if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
                 val now = SystemClock.elapsedRealtime()
-
-                // 1. Alerta por vibración
                 if (now - lastVibrationTime >= 800L) {
                     lastVibrationTime = now
                     triggerObstacleVibration()
                 }
 
-                // 2. Freno Autónomo de Emergencia
                 if (activeMovementButtonId != View.NO_ID) {
                     emergencyStop("Detenido por objeto cercano")
                 }
@@ -362,7 +349,6 @@ class DirectControlActivity : AppCompatActivity() {
                 "solicitando permiso usb" in lower -> txtUsbState.setChip("USB permiso", ChipState.BUSY)
                 "teclado usb desconectado" in lower || "no hay usb enumerado" in lower -> {
                     txtUsbState.setChip("USB", ChipState.IDLE)
-                    clearActiveMovement()
                 }
                 "permiso usb denegado" in lower ||
                         "no se pudo abrir el teclado usb" in lower ||
@@ -372,7 +358,6 @@ class DirectControlActivity : AppCompatActivity() {
                         "no declara soporte usb host" in lower ||
                         "no se pudo enviar reporte hid" in lower -> {
                     txtUsbState.setChip("USB error", ChipState.ERROR)
-                    clearActiveMovement()
                 }
             }
             when {

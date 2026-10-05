@@ -76,7 +76,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var detectionOverlay: DetectionOverlayView
     private lateinit var switchRemoteDetection: SwitchMaterial
 
-    // MÉTRICAS DE RED
     private lateinit var txtFpsMeter: TextView
     private lateinit var txtLatencyMeter: TextView
 
@@ -157,8 +156,14 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             context = this,
             onCommandDetected = { command ->
                 if (role == Role.CONTROLLER) {
-                    sendRemoteMessage(RemoteMessage.Movement(command))
-                    setStatus("Voz enviada: ${command.displayName}")
+                    if (socketLink.isConnected()) {
+                        sendRemoteMessage(RemoteMessage.Movement(command))
+                        setStatus("Voz enviada: ${command.displayName}")
+                    } else {
+                        setStatus("Voz reconocida (Sin conexión): ${command.displayName}")
+                    }
+                } else if (role == Role.ROBOT) {
+                    handleRobotMovement(command)
                 }
             },
             onErrorOrStatus = { msg ->
@@ -565,18 +570,15 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         robotEyesFull.react(command)
         txtRobotHint.text = command.displayName
         val controller = motorController ?: return
-        if (!controller.isReady()) controller.prepare()
-        if (!controller.send(command) && command != MovementCommand.STOP) {
-            setStatus("No se pudo enviar el movimiento al HID.")
-        } else {
-            setStatus("Comando: ${command.displayName}")
+        if (controller.isReady()) {
+            controller.send(command)
         }
+        setStatus("Comando: ${command.displayName}")
     }
 
     private fun emergencyRobotStop(message: String? = null) {
-        val controller = motorController ?: return
         lastRobotCommand = MovementCommand.STOP
-        controller.send(MovementCommand.STOP)
+        motorController?.takeIf { it.isReady() }?.send(MovementCommand.STOP)
         if (::robotEyes.isInitialized) robotEyes.react(MovementCommand.STOP)
         if (::robotEyesFull.isInitialized) robotEyesFull.react(MovementCommand.STOP)
         if (::txtRobotHint.isInitialized && role == Role.ROBOT) txtRobotHint.text = "Detenido"
@@ -683,7 +685,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private fun stopHeartbeatAndWatchdog() {
         mainHandler.removeCallbacks(heartbeatRunnable)
-        mainHandler.removeCallbacks(watchdogRunnable)
+        mainHandler.post(heartbeatRunnable)
     }
 
     private fun showRemoteFrame(frame: RemoteVideoFrame) {
@@ -716,15 +718,12 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
                 txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
-                // --- LÓGICA DE ALERTA HÁPTICA Y FRENO AUTÓNOMO REMOTO ---
                 if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
-                    // 1. Alerta por vibración en el controlador
                     if (now - lastVibrationTime >= 800L) {
                         lastVibrationTime = now
                         triggerObstacleVibration()
                     }
 
-                    // 2. Freno Autónomo: Forzamos la parada de emergencia en el robot a distancia
                     if (role == Role.CONTROLLER && socketLink.isConnected()) {
                         sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
                         setStatus("Detenido por objeto cercano")
