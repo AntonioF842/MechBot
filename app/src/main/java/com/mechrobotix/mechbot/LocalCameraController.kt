@@ -31,6 +31,7 @@ class LocalCameraController(
     private val mainExecutor = ContextCompat.getMainExecutor(context)
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageAnalysis: ImageAnalysis? = null
+    private var lastPreviewView: PreviewView? = null
     private var lastFrameTime = 0L
     private var lastDetectionErrorTime = 0L
     private var detectionReadyReported = false
@@ -39,6 +40,7 @@ class LocalCameraController(
     @Volatile private var running = false
     @Volatile private var closed = false
     @Volatile private var detectionEnabled = true
+    @Volatile private var isBackwardLens = false
     @Volatile private var detectionGeneration = 0L
     @Volatile private var sessionId = 0L
 
@@ -46,11 +48,12 @@ class LocalCameraController(
     fun start(previewView: PreviewView) {
         if (closed || running) return
         running = true
+        lastPreviewView = previewView
         smoother.reset()
         lastFrameTime = 0L
         detectionReadyReported = false
         val session = ++sessionId
-        onStatus("Iniciando cámara trasera.")
+        onStatus(if (isBackwardLens) "Iniciando cámara frontal (reversa)." else "Iniciando cámara trasera.")
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener({
             if (!isActive(session)) return@addListener
@@ -65,6 +68,16 @@ class LocalCameraController(
                 onStatus("No se pudo iniciar cámara: ${error.message}")
             }
         }, mainExecutor)
+    }
+
+    fun setCameraLens(isBackward: Boolean) {
+        if (closed || isBackwardLens == isBackward) return
+        isBackwardLens = isBackward
+        if (running && lastPreviewView != null) {
+            val view = lastPreviewView!!
+            stop()
+            start(view)
+        }
     }
 
     fun setDetectionEnabled(enabled: Boolean) {
@@ -86,16 +99,24 @@ class LocalCameraController(
         session: Long
     ) {
         try {
-            val useBackCamera = provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)
-            val selector = if (useBackCamera) {
-                CameraSelector.DEFAULT_BACK_CAMERA
+            val preferredSelector = if (isBackwardLens) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
+            val useBackCamera = if (isBackwardLens) {
+                !provider.hasCamera(preferredSelector)
             } else {
-                if (!provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
-                    throw IllegalStateException("No hay cámara disponible")
-                }
-                CameraSelector.DEFAULT_FRONT_CAMERA
+                provider.hasCamera(preferredSelector)
             }
-            val mirror = !useBackCamera
+
+            val selector = if (provider.hasCamera(preferredSelector)) {
+                preferredSelector
+            } else if (provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
+                CameraSelector.DEFAULT_BACK_CAMERA
+            } else if (provider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) {
+                CameraSelector.DEFAULT_FRONT_CAMERA
+            } else {
+                throw IllegalStateException("No hay cámara disponible")
+            }
+
+            val mirror = (selector == CameraSelector.DEFAULT_FRONT_CAMERA)
             previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
             val targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
@@ -113,7 +134,7 @@ class LocalCameraController(
             preview.setSurfaceProvider(previewView.surfaceProvider)
             provider.unbindAll()
             provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
-            onStatus(if (useBackCamera) "Cámara trasera activa." else "Cámara frontal activa como respaldo.")
+            onStatus(if (selector == CameraSelector.DEFAULT_FRONT_CAMERA) "Cámara frontal activa." else "Cámara trasera activa.")
         } catch (error: Exception) {
             if (session == sessionId) running = false
             onStatus("No se pudo iniciar cámara: ${error.message}")
@@ -199,6 +220,7 @@ class LocalCameraController(
         if (closed) return
         closed = true
         stop()
+        lastPreviewView = null
         cameraExecutor.shutdown()
         if (!detectionBusy.get()) closeDetectionResources()
     }

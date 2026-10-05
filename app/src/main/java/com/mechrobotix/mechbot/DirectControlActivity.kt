@@ -205,7 +205,7 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun executeVoiceCommand(command: MovementCommand) {
-        // Actualizar interfaz siempre sin depender de la conexión USB HID
+        cameraController.setCameraLens(command == MovementCommand.BACKWARD)
         txtMovement.text = command.displayName
         if (motorController.isReady()) {
             motorController.send(command)
@@ -230,6 +230,7 @@ class DirectControlActivity : AppCompatActivity() {
                     if (activeMovementButtonId != View.NO_ID) return@setOnTouchListener true
                     activeMovementButtonId = button.id
                     updateDirectionButtons()
+                    cameraController.setCameraLens(command == MovementCommand.BACKWARD)
                     txtMovement.text = command.displayName
                     if (motorController.isReady()) {
                         motorController.send(command)
@@ -239,7 +240,10 @@ class DirectControlActivity : AppCompatActivity() {
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (activeMovementButtonId == button.id) emergencyStop()
+                    if (activeMovementButtonId == button.id) {
+                        cameraController.setCameraLens(false)
+                        emergencyStop()
+                    }
                 }
             }
             true
