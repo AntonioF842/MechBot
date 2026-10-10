@@ -98,6 +98,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var videoRunning = false
     private var lastHeartbeatAt = 0L
     private var lastVibrationTime = 0L
+    private val spatialEngine = SpatialNavigationEngine()
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -194,6 +195,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     override fun onResume() {
         super.onResume()
+        spatialEngine.reset()
         if (role == Role.ROBOT) {
             motorController?.prepare()
             if (socketLink.isConnected()) startWatchdog()
@@ -362,6 +364,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         if (previousRole == Role.ROBOT) emergencyRobotStop()
         stopNetworkServices()
         releaseRoleResources(previousRole)
+        spatialEngine.reset()
         role = newRole
         controllerPanel.visibility = if (newRole == Role.CONTROLLER) View.VISIBLE else View.GONE
         robotPanel.visibility = if (newRole == Role.ROBOT) View.VISIBLE else View.GONE
@@ -520,6 +523,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         if (!enabled) {
             detectionOverlay.clear()
             txtDetectionSummary.text = "Detección desactivada"
+            spatialEngine.reset()
         } else {
             txtDetectionSummary.text = "Buscando objetos"
         }
@@ -569,6 +573,10 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         robotEyes.react(command)
         robotEyesFull.react(command)
         txtRobotHint.text = command.displayName
+
+        // Alternar lente según la dirección de movimiento (cámara de reversa)
+        //cameraStreamer?.setCameraLens(command == MovementCommand.BACKWARD)
+
         val controller = motorController ?: return
         if (controller.isReady()) {
             controller.send(command)
@@ -706,28 +714,35 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         if (frame.detectionEnabled) {
             detectionOverlay.setFrame(frame.detections, frame.bitmap.width, frame.bitmap.height)
-            val detection = frame.detections.firstOrNull()
 
-            if (detection == null) {
+            // --- ANÁLISIS GEOMÉTRICO SPATIAL EN MODO REMOTO ---
+            val spatialResult = spatialEngine.analyze(frame.detections)
+
+            if (spatialResult.distanceMeters != null) {
+                val distStr = String.format("%.2fm", spatialResult.distanceMeters)
+                val speedStr = spatialResult.closingSpeedMps?.let { spd ->
+                    if (spd > 0.1f) String.format(" · Acercándose a %.1fm/s", spd) else ""
+                } ?: ""
+
+                txtDetectionSummary.text = "${spatialResult.label ?: "Objeto"} · $distStr$speedStr · Sector: ${spatialResult.primaryZone}"
+            } else if (frame.detections.isEmpty()) {
                 txtDetectionSummary.text = "Sin objetos detectados"
             } else {
-                val confidence = if (detection.confidence > 0f) {
-                    " · ${(detection.confidence * 100f).roundToInt()}%"
-                } else {
-                    ""
+                txtDetectionSummary.text = "Objeto fuera de rango confiable"
+            }
+
+            // --- FRENO AUTÓNOMO Y ALERTA HÁPTICA REMOTA ---
+            if (spatialResult.action == NavigationAction.FRENAR) {
+                // 1. Alerta por vibración en el controlador
+                if (now - lastVibrationTime >= 800L) {
+                    lastVibrationTime = now
+                    triggerObstacleVibration()
                 }
-                txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
-                if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
-                    if (now - lastVibrationTime >= 800L) {
-                        lastVibrationTime = now
-                        triggerObstacleVibration()
-                    }
-
-                    if (role == Role.CONTROLLER && socketLink.isConnected()) {
-                        sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
-                        setStatus("Detenido por objeto cercano")
-                    }
+                // 2. Freno Autónomo: detener el robot a distancia si está en movimiento
+                if (role == Role.CONTROLLER && socketLink.isConnected()) {
+                    sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
+                    setStatus("Detenido por objeto cercano")
                 }
             }
         } else {
