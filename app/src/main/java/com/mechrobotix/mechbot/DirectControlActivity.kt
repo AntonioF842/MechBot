@@ -49,6 +49,7 @@ class DirectControlActivity : AppCompatActivity() {
     private var activeMovementButtonId = View.NO_ID
     private var cameraPermissionRequestInProgress = false
     private var lastVibrationTime = 0L
+    private val spatialEngine = SpatialNavigationEngine()
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -295,32 +296,38 @@ class DirectControlActivity : AppCompatActivity() {
             txtDetectionSummary.text = "Buscando objetos"
             return
         }
+
         detectionOverlay.setFrame(detections, imageWidth, imageHeight)
-        val detection = detections.firstOrNull()
-        if (detection == null) {
-            txtDetectionSummary.text = "Sin objetos detectados"
+
+        // --- ANÁLISIS GEOMÉTRICO AVANZADO Y ESTIMACIÓN DE DISTANCIA ---
+        val spatialResult = spatialEngine.analyze(detections)
+
+        if (spatialResult.distanceMeters != null) {
+            val distStr = String.format("%.2fm", spatialResult.distanceMeters)
+            val speedStr = spatialResult.closingSpeedMps?.let { spd ->
+                if (spd > 0.1f) String.format(" · Acercándose a %.1fm/s", spd) else ""
+            } ?: ""
+
+            txtDetectionSummary.text = "${spatialResult.label ?: "Objeto"} · $distStr$speedStr · Sector: ${spatialResult.primaryZone}"
+        } else if (detections.isEmpty()) {
+            txtDetectionSummary.text = "Camino libre"
         } else {
-            val confidence = if (detection.confidence > 0f) {
-                " · ${(detection.confidence * 100f).roundToInt()}%"
-            } else {
-                ""
+            txtDetectionSummary.text = "Objeto detectado fuera de rango confiable"
+        }
+
+        // --- FRENO AUTÓNOMO Y ALERTA HÁPTICA ---
+        if (spatialResult.action == NavigationAction.FRENAR) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastVibrationTime >= 800L) {
+                lastVibrationTime = now
+                triggerObstacleVibration()
             }
-            txtDetectionSummary.text = "${detection.label} · ${detection.proximity.text}$confidence"
 
-            if (detection.proximity.text.contains("Cerca", ignoreCase = true)) {
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastVibrationTime >= 800L) {
-                    lastVibrationTime = now
-                    triggerObstacleVibration()
-                }
-
-                if (activeMovementButtonId != View.NO_ID) {
-                    emergencyStop("Detenido por objeto cercano")
-                }
+            if (activeMovementButtonId != View.NO_ID) {
+                emergencyStop("Detenido por objeto cercano")
             }
         }
     }
-
     private fun triggerObstacleVibration() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
