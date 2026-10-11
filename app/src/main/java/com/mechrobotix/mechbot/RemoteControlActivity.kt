@@ -363,28 +363,40 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private fun selectRole(newRole: Role) {
         if (role == newRole) return
         val previousRole = role
+
+        // Si estaba en modo robot anteriormente, detener los motores por seguridad
         if (previousRole == Role.ROBOT) emergencyRobotStop()
-        stopNetworkServices()
+
+        // 1. NOTA: NO llamamos a stopNetworkServices() aquí si ya hay una conexión P2P activa,
+        //    solo liberamos los recursos específicos de la interfaz anterior.
         releaseRoleResources(previousRole)
         spatialEngine.reset()
+
         role = newRole
         controllerPanel.visibility = if (newRole == Role.CONTROLLER) View.VISIBLE else View.GONE
         robotPanel.visibility = if (newRole == Role.ROBOT) View.VISIBLE else View.GONE
         updateRoleButtons()
         setDetectionState(false, false)
+
         if (newRole == Role.ROBOT) {
             ensureRobotResources()
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            txtRobotHint.text = "Esperando controlador"
+            txtRobotHint.text = if (socketLink.isConnected()) "Conectado al controlador" else "Esperando controlador"
             motorController?.prepare()
             motorController?.send(MovementCommand.STOP)
             setStatus("Modo robot activo.")
-            ensurePermissionsAndDiscover(true)
+
+            // Si ya hay una conexión activa previa, mantenerla; si no, buscar/anunciar
+            if (!socketLink.isConnected()) {
+                ensurePermissionsAndDiscover(true)
+            }
         } else {
             exitEyesFullscreen()
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             setStatus("Modo controlador activo.")
-            ensurePermissionsAndDiscover(false)
+            if (!socketLink.isConnected()) {
+                ensurePermissionsAndDiscover(false)
+            }
         }
     }
 
@@ -460,9 +472,12 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             setStatus("Conecta primero con el robot.")
             return
         }
+        // 1. Iniciar el receptor local en el Controlador
         ensureControllerResources().start(info)
         videoRunning = true
         txtVideoState.setChip("Video", ChipState.BUSY)
+
+        // 2. Enviar la orden al Robot para que empiece a capturar con su cámara
         sendRemoteMessage(RemoteMessage.VideoOn)
     }
 
@@ -486,7 +501,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         }
         pendingVideoStart = false
         val (sender, streamer) = ensureRobotVideoResources()
-        sender.start(info)
+
+        // Pasar socketLink para obtener la IP del cliente
+        sender.start(info, socketLink)
         streamer.setDetectionEnabled(remoteDetectionEnabled)
         streamer.start(sender)
         videoRunning = true
@@ -575,6 +592,10 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         robotEyes.react(command)
         robotEyesFull.react(command)
         txtRobotHint.text = command.displayName
+
+        // --- CAMBIO AUTOMÁTICO A CÁMARA DE REVERSA/FRONTAL ---
+        // Si el comando es BACKWARD, conmuta a la cámara de reversa (si está disponible)
+        cameraStreamer?.setCameraLens(command == MovementCommand.BACKWARD)
 
         val controller = motorController ?: return
         if (controller.isReady()) {

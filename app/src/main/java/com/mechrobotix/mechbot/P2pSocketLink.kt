@@ -28,9 +28,14 @@ class P2pSocketLink(
     @Volatile private var connected = false
     @Volatile private var sessionId = 0L
 
+    // Guarda la IP remota detectada del cliente o del host conectado
+    @Volatile var remoteClientIp: String? = null
+        private set
+
     fun start(info: WifiP2pInfo) {
         stop()
         running = true
+        remoteClientIp = null
         val session = ++sessionId
         thread(name = "mechbot-command-socket") {
             var localServer: ServerSocket? = null
@@ -39,15 +44,20 @@ class P2pSocketLink(
             try {
                 val activeSocket = if (info.isGroupOwner) {
                     postStatus("Esperando socket de comandos en puerto $COMMAND_PORT...")
-                    ServerSocket(COMMAND_PORT).also {
+                    val server = ServerSocket(COMMAND_PORT).also {
                         it.reuseAddress = true
                         localServer = it
                         synchronized(lock) {
                             if (session == sessionId) serverSocket = it
                         }
-                    }.accept()
+                    }
+                    val accepted = server.accept()
+                    // Capturar la IP del cliente remoto que se conectó a este Group Owner
+                    remoteClientIp = accepted.inetAddress?.hostAddress
+                    accepted
                 } else {
-                    val host = info.groupOwnerAddress.hostAddress ?: return@thread
+                    val host = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+                    remoteClientIp = host
                     postStatus("Conectando socket de comandos a $host:$COMMAND_PORT...")
                     connectWithRetry(host, COMMAND_PORT, session)
                 }
@@ -116,6 +126,7 @@ class P2pSocketLink(
     fun stop() {
         running = false
         sessionId++
+        remoteClientIp = null
         var notify = false
         synchronized(lock) {
             notify = connected

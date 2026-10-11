@@ -6,7 +6,6 @@ import android.os.Looper
 import java.io.BufferedOutputStream
 import java.io.DataOutputStream
 import java.net.InetSocketAddress
-import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -16,36 +15,32 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
     private val main = Handler(Looper.getMainLooper())
     private val frames = LinkedBlockingQueue<VideoFramePacket>(1)
     private val lock = Any()
-    private var serverSocket: ServerSocket? = null
     private var socket: Socket? = null
     private var output: DataOutputStream? = null
     @Volatile private var running = false
     @Volatile private var sessionId = 0L
 
-    fun start(info: WifiP2pInfo) {
+    fun start(info: WifiP2pInfo, socketLink: P2pSocketLink? = null) {
         stop()
         running = true
         val session = ++sessionId
         thread(name = "mechbot-video-sender") {
-            var localServer: ServerSocket? = null
             var localSocket: Socket? = null
             var localOutput: DataOutputStream? = null
             try {
-                val activeSocket = if (info.isGroupOwner) {
-                    postStatus("Video: esperando receptor en puerto $VIDEO_PORT...")
-                    ServerSocket(VIDEO_PORT).also {
-                        it.reuseAddress = true
-                        localServer = it
-                        synchronized(lock) {
-                            if (session == sessionId) serverSocket = it
-                        }
-                    }.accept()
+                // Resolver la IP destino correcta dinámicamente
+                val targetHost = if (info.isGroupOwner) {
+                    // Si este teléfono (Robot) es GO, enviar a la IP del cliente remoto conectado
+                    socketLink?.remoteClientIp ?: "192.168.49.2"
                 } else {
-                    val host = info.groupOwnerAddress.hostAddress ?: return@thread
-                    postStatus("Video: conectando a $host:$VIDEO_PORT...")
-                    connectWithRetry(host, VIDEO_PORT, session)
+                    // Si es cliente, enviar a la IP del GO
+                    info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
                 }
+
+                postStatus("Video: conectando al controlador en $targetHost:$VIDEO_PORT...")
+                val activeSocket = connectWithRetry(targetHost, VIDEO_PORT, session)
                 localSocket = activeSocket
+
                 if (!running || session != sessionId) return@thread
                 activeSocket.tcpNoDelay = true
                 activeSocket.keepAlive = true
@@ -69,12 +64,10 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
             } finally {
                 runCatching { localOutput?.close() }
                 runCatching { localSocket?.close() }
-                runCatching { localServer?.close() }
                 synchronized(lock) {
                     if (session == sessionId) {
                         output = null
                         socket = null
-                        serverSocket = null
                     }
                 }
             }
@@ -94,10 +87,8 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
         synchronized(lock) {
             runCatching { output?.close() }
             runCatching { socket?.close() }
-            runCatching { serverSocket?.close() }
             output = null
             socket = null
-            serverSocket = null
         }
     }
 
@@ -112,7 +103,7 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
                 Thread.sleep(500)
             }
         }
-        throw lastError ?: IllegalStateException("No se pudo conectar video")
+        throw lastError ?: IllegalStateException("No se pudo conectar transmisión de video")
     }
 
     private fun postStatus(message: String) = main.post { onStatus(message) }

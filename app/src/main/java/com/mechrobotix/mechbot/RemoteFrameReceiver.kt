@@ -8,7 +8,6 @@ import android.os.Handler
 import android.os.Looper
 import java.io.BufferedInputStream
 import java.io.DataInputStream
-import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.atomic.AtomicBoolean
@@ -55,21 +54,17 @@ class RemoteFrameReceiver(
             var localServer: ServerSocket? = null
             var localSocket: Socket? = null
             try {
-                val activeSocket = if (info.isGroupOwner) {
-                    postStatus("Video: esperando al robot en puerto ${VideoFrameSender.VIDEO_PORT}...")
-                    ServerSocket(VideoFrameSender.VIDEO_PORT).also {
-                        it.reuseAddress = true
-                        localServer = it
-                        synchronized(lock) {
-                            if (session == sessionId) serverSocket = it
-                        }
-                    }.accept()
-                } else {
-                    val host = info.groupOwnerAddress.hostAddress ?: return@thread
-                    postStatus("Video: conectando al robot $host:${VideoFrameSender.VIDEO_PORT}...")
-                    connectWithRetry(host, VideoFrameSender.VIDEO_PORT, session)
+                postStatus("Video: esperando al robot en puerto ${VideoFrameSender.VIDEO_PORT}...")
+                val server = ServerSocket(VideoFrameSender.VIDEO_PORT).also {
+                    it.reuseAddress = true
+                    localServer = it
+                    synchronized(lock) {
+                        if (session == sessionId) serverSocket = it
+                    }
                 }
+                val activeSocket = server.accept()
                 localSocket = activeSocket
+
                 if (!running || session != sessionId) return@thread
                 activeSocket.tcpNoDelay = true
                 activeSocket.keepAlive = true
@@ -144,20 +139,6 @@ class RemoteFrameReceiver(
         val transformed = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
         if (transformed !== bitmap) recycle(bitmap)
         return transformed
-    }
-
-    private fun connectWithRetry(host: String, port: Int, session: Long): Socket {
-        var lastError: Exception? = null
-        repeat(30) {
-            if (!running || session != sessionId) throw IllegalStateException("Conexión cancelada")
-            try {
-                return Socket().apply { connect(InetSocketAddress(host, port), 1500) }
-            } catch (error: Exception) {
-                lastError = error
-                Thread.sleep(500)
-            }
-        }
-        throw lastError ?: IllegalStateException("No se pudo conectar video")
     }
 
     private fun recycle(bitmap: Bitmap) {
