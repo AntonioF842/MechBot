@@ -13,10 +13,15 @@ enum class NavigationAction {
     FRENAR
 }
 
-/**
- * Los tres primeros campos y el cuarto son los mismos que antes, así que el código existente
- * sigue compilando. Los nuevos tienen valor por defecto.
- */
+data class ProcessedObstacle(
+    val label: String,
+    val distanceMeters: Float,
+    val closingSpeedMps: Float,
+    val zone: String,
+    val inCorridor: Boolean,
+    val isCritical: Boolean
+)
+
 data class SpatialAnalysisResult(
     val action: NavigationAction,
     val primaryZone: String,
@@ -24,56 +29,44 @@ data class SpatialAnalysisResult(
     val isCriticalDistance: Boolean,
     val distanceMeters: Float? = null,
     val closingSpeedMps: Float? = null,
-    val label: String? = null
+    val label: String? = null,
+    val allObstacles: List<ProcessedObstacle> = emptyList()
 )
 
-/**
- * Geometría de la cámara respecto al piso. AJUSTAR con medidas reales de tu montaje.
- *
- * heightMeters:        altura del lente sobre el piso.
- * pitchDownDegrees:    cuánto está inclinada la cámara hacia abajo (0 = horizontal).
- * verticalFovDegrees:  campo de visión del eje VERTICAL de la imagen que analiza ML Kit
- *                      (depende de si el teléfono va en vertical u horizontal).
- * maxReliableMeters:   más allá de esto la estimación por piso no es confiable.
- */
 data class CameraGeometry(
     val heightMeters: Float = 0.60f,
-    val pitchDownDegrees: Float = 15f,
+    val pitchDownDegrees: Float = 20f, // Incrementado a 20° para corregir distancia sobreestimada
     val verticalFovDegrees: Float = 50f,
-    val maxReliableMeters: Float = 6f
+    val maxReliableMeters: Float = 5f
 )
 
 class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
 
     companion object {
-        // Corredor central por donde va a pasar el robot/silla (fracción del ancho de imagen)
-        private const val CORRIDOR_LEFT = 0.30f
-        private const val CORRIDOR_RIGHT = 0.70f
+        private const val CORRIDOR_LEFT = 0.28f
+        private const val CORRIDOR_RIGHT = 0.72f
         private const val MIN_CORRIDOR_OVERLAP = 0.05f
 
-        // Sectores solo para mostrar en pantalla
         private const val LEFT_ZONE_END = 0.33f
         private const val RIGHT_ZONE_START = 0.66f
 
-        // Umbrales de decisión (AJUSTAR según velocidad y distancia de frenado reales)
-        private const val STOP_DISTANCE_M = 1.0f
-        private const val WARN_DISTANCE_M = 2.0f
-        private const val TTC_LIMIT_S = 1.5f
+        // DISTANCIA DE FRENO ESTRICITA A 0.7 METROS
+        private const val STOP_DISTANCE_M = 0.70f
+        private const val WARN_DISTANCE_M = 1.80f
+        private const val TTC_LIMIT_S = 1.2f
         private const val MIN_SPEED_FOR_TTC = 0.1f
 
-        // Robustez frente a ruido
-        private const val CONFIRM_FRAMES = 2
-        private const val BRAKE_HOLD_MS = 600L
-        private const val DIST_ALPHA = 0.4f
+        private const val CONFIRM_FRAMES = 1
+        private const val BRAKE_HOLD_MS = 1000L // Mantiene el freno 1s ante pérdidas repentinas de detección
+        private const val DIST_ALPHA = 0.5f
         private const val SPEED_ALPHA = 0.3f
-        private const val TRACK_TIMEOUT_MS = 1000L
+        private const val TRACK_TIMEOUT_MS = 1200L
 
-        // Si la caja toca el borde inferior, el objeto está cortado: probablemente muy cerca
-        private const val EDGE_TOUCH_Y = 0.97f
+        // Si la caja está muy abajo en la imagen (proximidad ciega)
+        private const val EDGE_TOUCH_Y = 0.90f
 
-        // Distancias de respaldo cuando no hay estimación por piso
-        private const val FALLBACK_VERY_CLOSE_M = 0.8f
-        private const val FALLBACK_CLOSE_M = 1.5f
+        private const val FALLBACK_VERY_CLOSE_M = 0.50f
+        private const val FALLBACK_CLOSE_M = 1.00f
     }
 
     private class TrackState(var distance: Float, var lastTimeMs: Long, var speed: Float)
@@ -83,18 +76,20 @@ class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
         val distance: Float,
         val closingSpeed: Float,
         val inCorridor: Boolean,
-        val touchesBottom: Boolean
+        val touchesBottom: Boolean,
+        val zone: String
     )
 
     private val tracks = HashMap<Int, TrackState>()
     private var criticalFrames = 0
     private var brakeUntilMs = 0L
+    private var lastCriticalObstacle: ProcessedObstacle? = null
 
-    /** Llamar al cambiar de cámara (frontal/trasera) o al reanudar. */
     fun reset() {
         tracks.clear()
         criticalFrames = 0
         brakeUntilMs = 0L
+        lastCriticalObstacle = null
     }
 
     fun analyze(detections: List<DetectionResult>): SpatialAnalysisResult {
@@ -102,65 +97,91 @@ class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
         val candidates = detections.mapNotNull { buildCandidate(it, now) }
         pruneTracks(now)
 
-        // Prioridad: lo más cercano dentro del corredor; si no hay, lo más cercano en general
-        val hazard = candidates.filter { it.inCorridor }.minByOrNull { it.distance }
-            ?: candidates.minByOrNull { it.distance }
-
-        if (hazard == null) {
-            criticalFrames = 0
-            val braking = now < brakeUntilMs
-            return SpatialAnalysisResult(
-                action = if (braking) NavigationAction.FRENAR else NavigationAction.AVANZAR,
-                primaryZone = "Libre",
-                bottomYRatio = 0f,
-                isCriticalDistance = braking
+        val processedObstacles = candidates.map { c ->
+            val ttc = if (c.closingSpeed > MIN_SPEED_FOR_TTC) c.distance / c.closingSpeed else null
+            val isCrit = c.inCorridor && (
+                    c.distance <= STOP_DISTANCE_M ||
+                            c.touchesBottom ||
+                            c.detection.proximity == ObjectProximity.VERY_CLOSE ||
+                            (ttc != null && ttc < TTC_LIMIT_S && c.distance <= WARN_DISTANCE_M)
+                    )
+            ProcessedObstacle(
+                label = c.detection.label,
+                distanceMeters = c.distance,
+                closingSpeedMps = c.closingSpeed,
+                zone = c.zone,
+                inCorridor = c.inCorridor,
+                isCritical = isCrit
             )
         }
 
-        val det = hazard.detection
-        val centerX = (det.left + det.right) / 2f
-        val zone = when {
-            centerX < LEFT_ZONE_END -> "Izquierda"
-            centerX > RIGHT_ZONE_START -> "Derecha"
-            else -> "Centro"
+        // Evaluar si algún objeto actual es crítico
+        val currentCritical = processedObstacles.firstOrNull { it.isCritical }
+
+        if (currentCritical != null) {
+            lastCriticalObstacle = currentCritical
+            brakeUntilMs = now + BRAKE_HOLD_MS
         }
 
-        // Tiempo estimado al impacto (solo si realmente se está acercando)
-        val ttc = if (hazard.closingSpeed > MIN_SPEED_FOR_TTC) {
-            hazard.distance / hazard.closingSpeed
-        } else null
+        // Si la detección desaparece pero estábamos frenando, mantener freno activo (Protección de proximidad ciega)
+        val isStillHoldingBrake = now < brakeUntilMs
 
-        val danger = hazard.inCorridor && (
-                hazard.distance <= STOP_DISTANCE_M ||
-                        hazard.touchesBottom ||
-                        (ttc != null && ttc < TTC_LIMIT_S && hazard.distance <= WARN_DISTANCE_M)
+        if (processedObstacles.isEmpty()) {
+            if (isStillHoldingBrake && lastCriticalObstacle != null) {
+                val last = lastCriticalObstacle!!
+                return SpatialAnalysisResult(
+                    action = NavigationAction.FRENAR,
+                    primaryZone = last.zone,
+                    bottomYRatio = 1.0f,
+                    isCriticalDistance = true,
+                    distanceMeters = FALLBACK_VERY_CLOSE_M,
+                    closingSpeedMps = 0f,
+                    label = "${last.label} (Frente al chasis)",
+                    allObstacles = listOf(
+                        last.copy(distanceMeters = FALLBACK_VERY_CLOSE_M, isCritical = true)
+                    )
                 )
+            }
 
-        // Confirmar en varios fotogramas y mantener el freno un instante (evita parpadeo)
-        criticalFrames = if (danger) criticalFrames + 1 else 0
-        if (criticalFrames >= CONFIRM_FRAMES) brakeUntilMs = now + BRAKE_HOLD_MS
-        val braking = now < brakeUntilMs
+            return SpatialAnalysisResult(
+                action = NavigationAction.AVANZAR,
+                primaryZone = "Libre",
+                bottomYRatio = 0f,
+                isCriticalDistance = false,
+                allObstacles = emptyList()
+            )
+        }
+
+        val leftObstacles = processedObstacles.filter { it.zone == "Izquierda" }
+        val centerObstacles = processedObstacles.filter { it.zone == "Centro" || it.inCorridor }
+        val rightObstacles = processedObstacles.filter { it.zone == "Derecha" }
+
+        val hasCenterCritical = centerObstacles.any { it.isCritical || it.distanceMeters <= STOP_DISTANCE_M }
+        val danger = hasCenterCritical || isStillHoldingBrake
+
+        val minLeftDist = leftObstacles.minOfOrNull { it.distanceMeters } ?: 99f
+        val minRightDist = rightObstacles.minOfOrNull { it.distanceMeters } ?: 99f
 
         val action = when {
-            braking -> NavigationAction.FRENAR
-            hazard.inCorridor && hazard.distance <= WARN_DISTANCE_M -> {
-                // Rodear por el lado con más espacio libre
-                val leftFree = det.left
-                val rightFree = 1f - det.right
-                if (rightFree > leftFree) NavigationAction.RODEAR_DERECHA
+            danger -> NavigationAction.FRENAR
+            hasCenterCritical -> {
+                if (minRightDist > minLeftDist) NavigationAction.RODEAR_DERECHA
                 else NavigationAction.RODEAR_IZQUIERDA
             }
             else -> NavigationAction.AVANZAR
         }
 
+        val primaryHazard = candidates.minByOrNull { it.distance }!!
+
         return SpatialAnalysisResult(
             action = action,
-            primaryZone = zone,
-            bottomYRatio = det.bottom,
-            isCriticalDistance = braking,
-            distanceMeters = hazard.distance,
-            closingSpeedMps = hazard.closingSpeed,
-            label = det.label
+            primaryZone = primaryHazard.zone,
+            bottomYRatio = primaryHazard.detection.bottom,
+            isCriticalDistance = danger,
+            distanceMeters = primaryHazard.distance,
+            closingSpeedMps = primaryHazard.closingSpeed,
+            label = primaryHazard.detection.label,
+            allObstacles = processedObstacles
         )
     }
 
@@ -178,26 +199,28 @@ class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
             speed = 0f
         }
 
+        val centerX = (d.left + d.right) / 2f
+        val zone = when {
+            centerX < LEFT_ZONE_END -> "Izquierda"
+            centerX > RIGHT_ZONE_START -> "Derecha"
+            else -> "Centro"
+        }
+
         val overlap = min(d.right, CORRIDOR_RIGHT) - max(d.left, CORRIDOR_LEFT)
         return Candidate(
             detection = d,
             distance = distance,
             closingSpeed = speed,
             inCorridor = overlap >= MIN_CORRIDOR_OVERLAP,
-            touchesBottom = d.bottom >= EDGE_TOUCH_Y
+            touchesBottom = d.bottom >= EDGE_TOUCH_Y,
+            zone = zone
         )
     }
 
-    /**
-     * Distancia al punto donde el objeto toca el piso, con modelo de cámara estenopeica:
-     *   ángulo bajo el horizonte = pitch + atan(offset * tan(vFov / 2))
-     *   distancia = altura / tan(ángulo)
-     * Devuelve null si el punto está sobre el horizonte o más lejos de lo confiable.
-     */
     private fun groundDistance(bottomY: Float): Float? {
         val vFov = Math.toRadians(geometry.verticalFovDegrees.toDouble())
         val pitch = Math.toRadians(geometry.pitchDownDegrees.toDouble())
-        val offset = (bottomY.coerceIn(0f, 1f) - 0.5f) * 2f // -1 (arriba) .. +1 (abajo)
+        val offset = (bottomY.coerceIn(0f, 1f) - 0.5f) * 2f
         val angle = pitch + atan(offset * tan(vFov / 2.0))
         if (angle <= 0.02) return null
         val distance = (geometry.heightMeters / tan(angle)).toFloat()
@@ -210,7 +233,6 @@ class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
         else -> null
     }
 
-    /** Suaviza la distancia por objeto y estima la velocidad de acercamiento (m/s, + = se acerca). */
     private fun smooth(id: Int, raw: Float, now: Long): Pair<Float, Float> {
         val prev = tracks[id]
         if (prev == null) {

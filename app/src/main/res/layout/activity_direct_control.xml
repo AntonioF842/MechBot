@@ -143,6 +143,15 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent" />
 
+            <!-- COMPONENTE RADAR EN CONTROL DIRECTO -->
+            <com.mechrobotix.mechbot.RadarView
+                android:id="@+id/radarView"
+                android:layout_width="100dp"
+                android:layout_height="100dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="8dp"
+                android:background="@drawable/bg_chip_idle" />
+
             <TextView
                 android:id="@+id/txtDetectionSummary"
                 android:layout_width="wrap_content"

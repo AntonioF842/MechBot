@@ -78,6 +78,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private lateinit var txtFpsMeter: TextView
     private lateinit var txtLatencyMeter: TextView
+    private lateinit var radarView: RadarView
 
     private var frameCounter = 0
     private var lastFpsTimestamp = 0L
@@ -277,6 +278,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         txtFpsMeter = findViewById(R.id.txtFpsMeter)
         txtLatencyMeter = findViewById(R.id.txtLatencyMeter)
+        radarView = findViewById(R.id.radarView)
     }
 
     private fun bindUi() {
@@ -574,9 +576,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         robotEyesFull.react(command)
         txtRobotHint.text = command.displayName
 
-        // Alternar lente según la dirección de movimiento (cámara de reversa)
-        //cameraStreamer?.setCameraLens(command == MovementCommand.BACKWARD)
-
         val controller = motorController ?: return
         if (controller.isReady()) {
             controller.send(command)
@@ -718,6 +717,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             // --- ANÁLISIS GEOMÉTRICO SPATIAL EN MODO REMOTO ---
             val spatialResult = spatialEngine.analyze(frame.detections)
 
+            // --- ACTUALIZACIÓN DE TELEMETRÍA EN RADAR 2D REMOTO ---
+            radarView.updateSpatialData(spatialResult)
+
             if (spatialResult.distanceMeters != null) {
                 val distStr = String.format("%.2fm", spatialResult.distanceMeters)
                 val speedStr = spatialResult.closingSpeedMps?.let { spd ->
@@ -739,15 +741,18 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                     triggerObstacleVibration()
                 }
 
-                // 2. Freno Autónomo: detener el robot a distancia si está en movimiento
+                // 2. Freno Autónomo: detener el robot a distancia solo si intenta AVANZAR
                 if (role == Role.CONTROLLER && socketLink.isConnected()) {
-                    sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
-                    setStatus("Detenido por objeto cercano")
+                    if (lastRobotCommand == MovementCommand.FORWARD) {
+                        sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
+                        setStatus("Objeto cercano al frente. Gire o retroceda.")
+                    }
                 }
             }
         } else {
             detectionOverlay.clear()
             txtDetectionSummary.text = "Detección desactivada"
+            radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
         }
 
         if (previous !== frame.bitmap && previous?.isRecycled == false) previous.recycle()

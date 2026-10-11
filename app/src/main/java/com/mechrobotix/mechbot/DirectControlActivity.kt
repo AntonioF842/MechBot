@@ -45,6 +45,7 @@ class DirectControlActivity : AppCompatActivity() {
     private lateinit var motorController: UsbKeyboardLedMotorController
     private lateinit var cameraController: LocalCameraController
     private lateinit var voiceCommandHelper: VoiceCommandHelper
+    private lateinit var radarView: RadarView
 
     private var activeMovementButtonId = View.NO_ID
     private var cameraPermissionRequestInProgress = false
@@ -161,6 +162,7 @@ class DirectControlActivity : AppCompatActivity() {
         btnRight = findViewById(R.id.btnRight)
         btnStop = findViewById(R.id.btnStop)
         btnVoiceCommand = findViewById(R.id.btnVoiceCommand)
+        radarView = findViewById(R.id.radarView)
     }
 
     private fun bindControls() {
@@ -289,11 +291,13 @@ class DirectControlActivity : AppCompatActivity() {
         if (!switchDetection.isChecked) {
             detectionOverlay.clear()
             txtDetectionSummary.text = "Detección desactivada"
+            radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
             return
         }
         if (imageWidth <= 0 || imageHeight <= 0) {
             detectionOverlay.clear()
             txtDetectionSummary.text = "Buscando objetos"
+            radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
             return
         }
 
@@ -301,6 +305,9 @@ class DirectControlActivity : AppCompatActivity() {
 
         // --- ANÁLISIS GEOMÉTRICO AVANZADO Y ESTIMACIÓN DE DISTANCIA ---
         val spatialResult = spatialEngine.analyze(detections)
+
+        // --- ACTUALIZACIÓN DE TELEMETRÍA EN RADAR 2D ---
+        radarView.updateSpatialData(spatialResult)
 
         if (spatialResult.distanceMeters != null) {
             val distStr = String.format("%.2fm", spatialResult.distanceMeters)
@@ -323,11 +330,13 @@ class DirectControlActivity : AppCompatActivity() {
                 triggerObstacleVibration()
             }
 
-            if (activeMovementButtonId != View.NO_ID) {
-                emergencyStop("Detenido por objeto cercano")
+            // Solo frena si el usuario intenta AVANZAR de frente
+            if (activeMovementButtonId == R.id.btnForward) {
+                emergencyStop("Detenido por objeto cercano. Gire o retroceda.")
             }
         }
     }
+
     private fun triggerObstacleVibration() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vibratorManager = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
