@@ -17,12 +17,12 @@ import android.view.WindowManager
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
-import kotlin.math.roundToInt
 
 class DirectControlActivity : AppCompatActivity() {
     private enum class ChipState { IDLE, BUSY, OK, ERROR }
@@ -42,15 +42,20 @@ class DirectControlActivity : AppCompatActivity() {
     private lateinit var btnRight: MaterialButton
     private lateinit var btnStop: MaterialButton
     private lateinit var btnVoiceCommand: MaterialButton
+    private lateinit var btnBciConnect: MaterialButton
+
     private lateinit var motorController: UsbKeyboardLedMotorController
     private lateinit var cameraController: LocalCameraController
     private lateinit var voiceCommandHelper: VoiceCommandHelper
+    private lateinit var bciManager: BciBluetoothManager
     private lateinit var radarView: RadarView
 
     private var activeMovementButtonId = View.NO_ID
     private var cameraPermissionRequestInProgress = false
     private var lastVibrationTime = 0L
+    private var bciEnabled = false
     private val spatialEngine = SpatialNavigationEngine()
+    private var lastSpatialResult: SpatialAnalysisResult? = null
 
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -75,11 +80,22 @@ class DirectControlActivity : AppCompatActivity() {
         }
     }
 
+    private val bluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result.values.all { it }) {
+            showBciDevicePicker()
+        } else {
+            setStatus("Permisos de Bluetooth denegados.")
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_direct_control)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         bindViews()
+
         motorController = UsbKeyboardLedMotorController(this, ::handleComponentStatus)
         cameraController = LocalCameraController(
             context = this,
@@ -90,12 +106,14 @@ class DirectControlActivity : AppCompatActivity() {
 
         voiceCommandHelper = VoiceCommandHelper(
             context = this,
-            onCommandDetected = { command ->
-                executeVoiceCommand(command)
-            },
-            onErrorOrStatus = { statusMessage ->
-                setStatus(statusMessage)
-            }
+            onCommandDetected = { command -> executeVoiceCommand(command) },
+            onErrorOrStatus = { statusMessage -> setStatus(statusMessage) }
+        )
+
+        bciManager = BciBluetoothManager(
+            context = this,
+            onBrainCommandDetected = { command, confidence -> executeBrainCommand(command, confidence) },
+            onStatusMessage = { status -> setStatus(status) }
         )
 
         switchDetection.isChecked = true
@@ -116,6 +134,7 @@ class DirectControlActivity : AppCompatActivity() {
     override fun onPause() {
         emergencyStop()
         voiceCommandHelper.stopListening()
+        bciManager.disconnect()
         super.onPause()
     }
 
@@ -123,6 +142,7 @@ class DirectControlActivity : AppCompatActivity() {
         emergencyStop()
         cameraController.stop()
         voiceCommandHelper.stopListening()
+        bciManager.disconnect()
         super.onStop()
     }
 
@@ -141,6 +161,7 @@ class DirectControlActivity : AppCompatActivity() {
     override fun onDestroy() {
         emergencyStop()
         voiceCommandHelper.destroy()
+        bciManager.disconnect()
         cameraController.close()
         motorController.close()
         super.onDestroy()
@@ -162,6 +183,7 @@ class DirectControlActivity : AppCompatActivity() {
         btnRight = findViewById(R.id.btnRight)
         btnStop = findViewById(R.id.btnStop)
         btnVoiceCommand = findViewById(R.id.btnVoiceCommand)
+        btnBciConnect = findViewById(R.id.btnBciConnect)
         radarView = findViewById(R.id.radarView)
     }
 
@@ -170,6 +192,7 @@ class DirectControlActivity : AppCompatActivity() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() = returnToMain()
         })
+
         switchDetection.setOnCheckedChangeListener { _, enabled ->
             cameraController.setDetectionEnabled(enabled)
             if (enabled) {
@@ -181,10 +204,12 @@ class DirectControlActivity : AppCompatActivity() {
                 txtDetectionSummary.text = "Detección desactivada"
             }
         }
+
         bindMovementButton(btnForward, MovementCommand.FORWARD)
         bindMovementButton(btnBackward, MovementCommand.BACKWARD)
         bindMovementButton(btnLeft, MovementCommand.LEFT)
         bindMovementButton(btnRight, MovementCommand.RIGHT)
+
         btnStop.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> emergencyStop("STOP activado.")
@@ -194,9 +219,8 @@ class DirectControlActivity : AppCompatActivity() {
         }
         btnStop.setOnClickListener { emergencyStop("STOP activado.") }
 
-        btnVoiceCommand.setOnClickListener {
-            ensureAudioPermissionAndListen()
-        }
+        btnVoiceCommand.setOnClickListener { ensureAudioPermissionAndListen() }
+        btnBciConnect.setOnClickListener { ensureBluetoothPermissionAndPickDevice() }
     }
 
     private fun ensureAudioPermissionAndListen() {
@@ -207,9 +231,67 @@ class DirectControlActivity : AppCompatActivity() {
         }
     }
 
-    private fun executeVoiceCommand(command: MovementCommand) {
+    private fun ensureBluetoothPermissionAndPickDevice() {
+        val permissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        }
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) {
+            showBciDevicePicker()
+        } else {
+            bluetoothPermissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun showBciDevicePicker() {
+        val pairedDevices = bciManager.getPairedDevices()
+        if (pairedDevices.isEmpty()) {
+            setStatus("No hay dispositivos Bluetooth emparejados. Vincula la ESP32 en Ajustes.")
+            return
+        }
+
+        val deviceNames = pairedDevices.map { it.name ?: it.address }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Seleccionar Casco EEG (ESP32)")
+            .setItems(deviceNames) { _, which ->
+                val selectedDevice = pairedDevices[which]
+                bciEnabled = true
+                bciManager.connectToDevice(selectedDevice)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun executeBrainCommand(command: MovementCommand, confidenceInfo: String) {
+        if (!bciEnabled) return
+
+        // Filtro de seguridad autónomo para comandos BCI
+        if (lastSpatialResult?.action == NavigationAction.FRENAR && command == MovementCommand.FORWARD) {
+            emergencyStop("BCI Bloqueado: Obstáculo cercano al frente. Comando '$command' rechazado.")
+            return
+        }
+
         cameraController.setCameraLens(command == MovementCommand.BACKWARD)
-        txtMovement.text = command.displayName
+        txtMovement.text = "BCI: ${command.displayName}$confidenceInfo"
+
+        if (motorController.isReady()) {
+            motorController.send(command)
+        } else {
+            setStatus("BCI (${command.displayName}): Teclado USB no conectado.")
+        }
+    }
+
+    private fun executeVoiceCommand(command: MovementCommand) {
+        if (lastSpatialResult?.action == NavigationAction.FRENAR && command == MovementCommand.FORWARD) {
+            emergencyStop("Voz Bloqueada: Obstáculo cercano al frente. Comando '$command' rechazado.")
+            return
+        }
+
+        cameraController.setCameraLens(command == MovementCommand.BACKWARD)
+        txtMovement.text = "Voz: ${command.displayName}"
         if (motorController.isReady()) {
             motorController.send(command)
             setStatus("Comando de voz enviado al HID: ${command.displayName}")
@@ -288,25 +370,17 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun showDetections(detections: List<DetectionResult>, imageWidth: Int, imageHeight: Int) {
-        if (!switchDetection.isChecked) {
+        if (!switchDetection.isChecked || imageWidth <= 0 || imageHeight <= 0) {
             detectionOverlay.clear()
-            txtDetectionSummary.text = "Detección desactivada"
+            txtDetectionSummary.text = if (!switchDetection.isChecked) "Detección desactivada" else "Buscando objetos"
             radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
-            return
-        }
-        if (imageWidth <= 0 || imageHeight <= 0) {
-            detectionOverlay.clear()
-            txtDetectionSummary.text = "Buscando objetos"
-            radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
+            lastSpatialResult = null
             return
         }
 
         detectionOverlay.setFrame(detections, imageWidth, imageHeight)
-
-        // --- ANÁLISIS GEOMÉTRICO AVANZADO Y ESTIMACIÓN DE DISTANCIA ---
         val spatialResult = spatialEngine.analyze(detections)
-
-        // --- ACTUALIZACIÓN DE TELEMETRÍA EN RADAR 2D ---
+        lastSpatialResult = spatialResult
         radarView.updateSpatialData(spatialResult)
 
         if (spatialResult.distanceMeters != null) {
@@ -314,7 +388,6 @@ class DirectControlActivity : AppCompatActivity() {
             val speedStr = spatialResult.closingSpeedMps?.let { spd ->
                 if (spd > 0.1f) String.format(" · Acercándose a %.1fm/s", spd) else ""
             } ?: ""
-
             txtDetectionSummary.text = "${spatialResult.label ?: "Objeto"} · $distStr$speedStr · Sector: ${spatialResult.primaryZone}"
         } else if (detections.isEmpty()) {
             txtDetectionSummary.text = "Camino libre"
@@ -322,7 +395,6 @@ class DirectControlActivity : AppCompatActivity() {
             txtDetectionSummary.text = "Objeto detectado fuera de rango confiable"
         }
 
-        // --- FRENO AUTÓNOMO Y ALERTA HÁPTICA ---
         if (spatialResult.action == NavigationAction.FRENAR) {
             val now = SystemClock.elapsedRealtime()
             if (now - lastVibrationTime >= 800L) {
@@ -330,7 +402,6 @@ class DirectControlActivity : AppCompatActivity() {
                 triggerObstacleVibration()
             }
 
-            // Solo frena si el usuario intenta AVANZAR de frente
             if (activeMovementButtonId == R.id.btnForward) {
                 emergencyStop("Detenido por objeto cercano. Gire o retroceda.")
             }
@@ -367,18 +438,8 @@ class DirectControlActivity : AppCompatActivity() {
             when {
                 "teclado usb listo" in lower -> txtUsbState.setChip("USB listo", ChipState.OK)
                 "solicitando permiso usb" in lower -> txtUsbState.setChip("USB permiso", ChipState.BUSY)
-                "teclado usb desconectado" in lower || "no hay usb enumerado" in lower -> {
-                    txtUsbState.setChip("USB", ChipState.IDLE)
-                }
-                "permiso usb denegado" in lower ||
-                        "no se pudo abrir el teclado usb" in lower ||
-                        "no se pudo tomar control" in lower ||
-                        "no expone teclado hid" in lower ||
-                        "pero no teclado hid" in lower ||
-                        "no declara soporte usb host" in lower ||
-                        "no se pudo enviar reporte hid" in lower -> {
-                    txtUsbState.setChip("USB error", ChipState.ERROR)
-                }
+                "teclado usb desconectado" in lower || "no hay usb enumerado" in lower -> txtUsbState.setChip("USB", ChipState.IDLE)
+                "permiso usb denegado" in lower || "no se pudo abrir el teclado usb" in lower || "no expone teclado hid" in lower -> txtUsbState.setChip("USB error", ChipState.ERROR)
             }
             when {
                 "iniciando cámara" in lower -> txtCameraState.setChip("Cámara", ChipState.BUSY)
@@ -391,10 +452,6 @@ class DirectControlActivity : AppCompatActivity() {
                 "detección activa" in lower -> txtDetectionState.setChip("Detección lista", ChipState.OK)
                 "detección deshabilitada" in lower -> txtDetectionState.setChip("Detección off", ChipState.IDLE)
                 "error de detección" in lower -> txtDetectionState.setChip("Detección error", ChipState.ERROR)
-                "cámara detenida" in lower -> txtDetectionState.setChip(
-                    if (switchDetection.isChecked) "Detección" else "Detección off",
-                    ChipState.IDLE
-                )
             }
         }
     }

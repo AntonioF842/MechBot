@@ -30,6 +30,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -37,7 +38,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
-import kotlin.math.roundToInt
 
 class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks {
     private enum class Role { NONE, CONTROLLER, ROBOT }
@@ -50,6 +50,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var cameraStreamer: RemoteCameraStreamer? = null
     private var motorController: UsbKeyboardLedMotorController? = null
     private lateinit var voiceCommandHelper: VoiceCommandHelper
+    private lateinit var bciManager: BciBluetoothManager
 
     private lateinit var txtStatus: TextView
     private lateinit var txtWifiState: TextView
@@ -68,6 +69,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var btnRobotMode: MaterialButton
     private lateinit var btnRobotTests: MaterialButton
     private lateinit var btnRemoteVoice: MaterialButton
+    private lateinit var btnBciConnectRemote: MaterialButton
     private lateinit var robotTestControls: LinearLayout
     private lateinit var robotEyes: RobotEyesView
     private lateinit var robotEyesFull: RobotEyesView
@@ -97,6 +99,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var updatingDetectionSwitches = false
     private var pendingVideoStart = false
     private var videoRunning = false
+    private var bciEnabled = false
     private var lastHeartbeatAt = 0L
     private var lastVibrationTime = 0L
     private val spatialEngine = SpatialNavigationEngine()
@@ -122,6 +125,16 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             voiceCommandHelper.startListening()
         } else {
             setStatus("Permiso de micrófono denegado para comandos de voz.")
+        }
+    }
+
+    private val bluetoothPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result.values.all { it }) {
+            showBciDevicePicker()
+        } else {
+            setStatus("Permisos de Bluetooth denegados.")
         }
     }
 
@@ -168,9 +181,24 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                     handleRobotMovement(command)
                 }
             },
-            onErrorOrStatus = { msg ->
-                setStatus(msg)
-            }
+            onErrorOrStatus = { msg -> setStatus(msg) }
+        )
+
+        bciManager = BciBluetoothManager(
+            context = this,
+            onBrainCommandDetected = { command, confidence ->
+                if (role == Role.CONTROLLER) {
+                    if (socketLink.isConnected()) {
+                        sendRemoteMessage(RemoteMessage.Movement(command))
+                        setStatus("Comando BCI enviado: ${command.displayName}$confidence")
+                    } else {
+                        setStatus("BCI (${command.displayName}): Sin conexión Wi-Fi Direct.")
+                    }
+                } else if (role == Role.ROBOT) {
+                    handleRobotMovement(command)
+                }
+            },
+            onStatusMessage = { msg -> setStatus(msg) }
         )
 
         bindUi()
@@ -208,6 +236,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     override fun onPause() {
         stopHeartbeatAndWatchdog()
         voiceCommandHelper.stopListening()
+        bciManager.disconnect()
         if (role == Role.CONTROLLER) sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
         if (role == Role.ROBOT) emergencyRobotStop()
         super.onPause()
@@ -216,6 +245,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     override fun onStop() {
         wifi.unregister()
         voiceCommandHelper.stopListening()
+        bciManager.disconnect()
         super.onStop()
     }
 
@@ -243,6 +273,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         stopHeartbeatAndWatchdog()
         emergencyRobotStop()
         voiceCommandHelper.destroy()
+        bciManager.disconnect()
         socketLink.close()
         releaseControllerResources()
         releaseRobotResources()
@@ -268,6 +299,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         btnRobotMode = findViewById(R.id.btnRobotMode)
         btnRobotTests = findViewById(R.id.btnRobotTests)
         btnRemoteVoice = findViewById(R.id.btnRemoteVoice)
+        btnBciConnectRemote = findViewById(R.id.btnBciConnectRemote)
         robotTestControls = findViewById(R.id.robotTestControls)
         robotEyes = findViewById(R.id.robotEyes)
         robotEyesFull = findViewById(R.id.robotEyesFull)
@@ -294,9 +326,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         switchRemoteDetection.setOnCheckedChangeListener { _, enabled ->
             if (!updatingDetectionSwitches && role == Role.CONTROLLER) requestRemoteDetection(enabled)
         }
-        btnRemoteVoice.setOnClickListener {
-            ensureAudioPermissionAndListen()
-        }
+        btnRemoteVoice.setOnClickListener { ensureAudioPermissionAndListen() }
+        btnBciConnectRemote.setOnClickListener { ensureBluetoothPermissionAndPickDevice() }
+
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (isEyesFullscreen) {
@@ -306,6 +338,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
             }
         })
+
         bindMovementButton(R.id.btnForward, MovementCommand.FORWARD)
         bindMovementButton(R.id.btnBackward, MovementCommand.BACKWARD)
         bindMovementButton(R.id.btnLeft, MovementCommand.LEFT)
@@ -313,6 +346,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         findViewById<Button>(R.id.btnStop).setOnClickListener {
             sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
         }
+
         bindRobotTestMovementButton(R.id.btnTestForward, MovementCommand.FORWARD)
         bindRobotTestMovementButton(R.id.btnTestBackward, MovementCommand.BACKWARD)
         bindRobotTestMovementButton(R.id.btnTestLeft, MovementCommand.LEFT)
@@ -330,6 +364,40 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         } else {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
+    }
+
+    private fun ensureBluetoothPermissionAndPickDevice() {
+        val permissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        }
+        val missing = permissions.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) {
+            showBciDevicePicker()
+        } else {
+            bluetoothPermissionLauncher.launch(missing.toTypedArray())
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun showBciDevicePicker() {
+        val pairedDevices = bciManager.getPairedDevices()
+        if (pairedDevices.isEmpty()) {
+            setStatus("No hay dispositivos Bluetooth emparejados. Vincula la ESP32 en Ajustes.")
+            return
+        }
+
+        val deviceNames = pairedDevices.map { it.name ?: it.address }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("Seleccionar Casco EEG (ESP32)")
+            .setItems(deviceNames) { _, which ->
+                val selectedDevice = pairedDevices[which]
+                bciEnabled = true
+                bciManager.connectToDevice(selectedDevice)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun returnToMain() {
@@ -364,11 +432,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         if (role == newRole) return
         val previousRole = role
 
-        // Si estaba en modo robot anteriormente, detener los motores por seguridad
         if (previousRole == Role.ROBOT) emergencyRobotStop()
-
-        // 1. NOTA: NO llamamos a stopNetworkServices() aquí si ya hay una conexión P2P activa,
-        //    solo liberamos los recursos específicos de la interfaz anterior.
         releaseRoleResources(previousRole)
         spatialEngine.reset()
 
@@ -386,7 +450,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             motorController?.send(MovementCommand.STOP)
             setStatus("Modo robot activo.")
 
-            // Si ya hay una conexión activa previa, mantenerla; si no, buscar/anunciar
             if (!socketLink.isConnected()) {
                 ensurePermissionsAndDiscover(true)
             }
@@ -472,12 +535,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             setStatus("Conecta primero con el robot.")
             return
         }
-        // 1. Iniciar el receptor local en el Controlador
         ensureControllerResources().start(info)
         videoRunning = true
         txtVideoState.setChip("Video", ChipState.BUSY)
-
-        // 2. Enviar la orden al Robot para que empiece a capturar con su cámara
         sendRemoteMessage(RemoteMessage.VideoOn)
     }
 
@@ -502,7 +562,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         pendingVideoStart = false
         val (sender, streamer) = ensureRobotVideoResources()
 
-        // Pasar socketLink para obtener la IP del cliente
         sender.start(info, socketLink)
         streamer.setDetectionEnabled(remoteDetectionEnabled)
         streamer.start(sender)
@@ -593,8 +652,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         robotEyesFull.react(command)
         txtRobotHint.text = command.displayName
 
-        // --- CAMBIO AUTOMÁTICO A CÁMARA DE REVERSA/FRONTAL ---
-        // Si el comando es BACKWARD, conmuta a la cámara de reversa (si está disponible)
         cameraStreamer?.setCameraLens(command == MovementCommand.BACKWARD)
 
         val controller = motorController ?: return
@@ -663,9 +720,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
         }
-        val missing = required.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
+        val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) {
             wifi.discoverPeers()
             if (pendingVideoStart && role == Role.ROBOT) startRobotVideoIfReady()
@@ -734,11 +789,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         if (frame.detectionEnabled) {
             detectionOverlay.setFrame(frame.detections, frame.bitmap.width, frame.bitmap.height)
-
-            // --- ANÁLISIS GEOMÉTRICO SPATIAL EN MODO REMOTO ---
             val spatialResult = spatialEngine.analyze(frame.detections)
-
-            // --- ACTUALIZACIÓN DE TELEMETRÍA EN RADAR 2D REMOTO ---
             radarView.updateSpatialData(spatialResult)
 
             if (spatialResult.distanceMeters != null) {
@@ -746,7 +797,6 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 val speedStr = spatialResult.closingSpeedMps?.let { spd ->
                     if (spd > 0.1f) String.format(" · Acercándose a %.1fm/s", spd) else ""
                 } ?: ""
-
                 txtDetectionSummary.text = "${spatialResult.label ?: "Objeto"} · $distStr$speedStr · Sector: ${spatialResult.primaryZone}"
             } else if (frame.detections.isEmpty()) {
                 txtDetectionSummary.text = "Sin objetos detectados"
@@ -754,15 +804,12 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 txtDetectionSummary.text = "Objeto fuera de rango confiable"
             }
 
-            // --- FRENO AUTÓNOMO Y ALERTA HÁPTICA REMOTA ---
             if (spatialResult.action == NavigationAction.FRENAR) {
-                // 1. Alerta por vibración en el controlador
                 if (now - lastVibrationTime >= 800L) {
                     lastVibrationTime = now
                     triggerObstacleVibration()
                 }
 
-                // 2. Freno Autónomo: detener el robot a distancia solo si intenta AVANZAR
                 if (role == Role.CONTROLLER && socketLink.isConnected()) {
                     if (lastRobotCommand == MovementCommand.FORWARD) {
                         sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
