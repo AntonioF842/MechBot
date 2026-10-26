@@ -69,35 +69,41 @@ class BciBluetoothManager(
     }
 
     private fun processCsvPacket(csv: String) {
-        val tokens = csv.split(",")
-        // Columna 12 (índice 11) corresponde a 'lastCommand' (0..3, P)
-        if (tokens.size >= 12) {
-            val rawCommand = tokens[11].trim()
-            val parsedCommand = when (rawCommand) {
-                "1" -> MovementCommand.FORWARD
-                "2" -> MovementCommand.LEFT
-                "3" -> MovementCommand.RIGHT
-                "0", "P", "?" -> MovementCommand.STOP
-                else -> MovementCommand.STOP
+        // Limpiamos el texto recibido (quitando espacios o saltos de línea)
+        val rawData = csv.trim()
+        if (rawData.isEmpty()) return
+
+        // Si el nuevo casco envía una cadena estructurada o un valor simple:
+        val tokens = rawData.split(",")
+
+        // Obtenemos el comando: si viene en CSV usará el token, si es un dato simple usará el texto completo
+        val rawCommand = if (tokens.size >= 12) tokens[11].trim() else tokens[0].trim()
+
+        // Mapeo flexible de direcciones
+        val parsedCommand = when (rawCommand.uppercase()) {
+            "1", "F", "FORWARD", "ADELANTE" -> MovementCommand.FORWARD
+            "2", "L", "LEFT", "IZQUIERDA"   -> MovementCommand.LEFT
+            "3", "R", "RIGHT", "DERECHA"    -> MovementCommand.RIGHT
+            "0", "S", "STOP", "P", "PARAR"  -> MovementCommand.STOP
+            else -> MovementCommand.STOP
+        }
+
+        // Extracción opcional del porcentaje de confianza (si la trama trae más de 20 datos)
+        val confidenceStr = if (tokens.size >= 25) {
+            val idx = when (rawCommand) {
+                "1" -> 22
+                "2" -> 23
+                "3" -> 24
+                else -> 21
             }
+            tokens.getOrNull(idx)?.trim()?.let { " (${it}% conf)" } ?: ""
+        } else ""
 
-            // Extracción de porcentaje de confianza (columnas 22-25, índices 21-24)
-            val confidenceStr = if (tokens.size >= 25) {
-                val idx = when (rawCommand) {
-                    "1" -> 22 // prob1
-                    "2" -> 23 // prob2
-                    "3" -> 24 // prob3
-                    else -> 21 // prob0
-                }
-                tokens.getOrNull(idx)?.trim()?.let { " (${it}% conf)" } ?: ""
-            } else ""
+        // --- APLICACIÓN DEL FILTRO ANTI-RUIDO (DEBOUNCE EXISTENTE) ---
+        val filterCommand = filterIncomingCommand(parsedCommand) ?: return
 
-            // --- APLICACIÓN DEL FILTRO ANTI-RUIDO ---
-            val filterCommand = filterIncomingCommand(parsedCommand) ?: return
-
-            mainHandler.post {
-                onBrainCommandDetected(filterCommand, confidenceStr)
-            }
+        mainHandler.post {
+            onBrainCommandDetected(filterCommand, confidenceStr)
         }
     }
 
