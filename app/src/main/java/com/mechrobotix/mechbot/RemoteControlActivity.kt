@@ -1,6 +1,7 @@
 package com.mechrobotix.mechbot
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
@@ -51,6 +52,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var motorController: UsbKeyboardLedMotorController? = null
     private lateinit var voiceCommandHelper: VoiceCommandHelper
     private lateinit var bciManager: BciBluetoothManager
+    private var locationHelper: LocationHelper? = null
 
     private lateinit var txtStatus: TextView
     private lateinit var txtWifiState: TextView
@@ -112,6 +114,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             setStatus("Permisos listos.")
             wifi.discoverPeers()
             if (pendingVideoStart && role == Role.ROBOT) startRobotVideoIfReady()
+            if (role == Role.ROBOT) startRobotLocationIfAllowed()
         } else {
             pendingVideoStart = false
             setStatus("Faltan permisos: ${denied.joinToString()}")
@@ -227,7 +230,10 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         spatialEngine.reset()
         if (role == Role.ROBOT) {
             motorController?.prepare()
-            if (socketLink.isConnected()) startWatchdog()
+            if (socketLink.isConnected()) {
+                startWatchdog()
+                startRobotLocationIfAllowed()
+            }
         } else if (role == Role.CONTROLLER && socketLink.isConnected()) {
             startHeartbeat()
         }
@@ -235,6 +241,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     override fun onPause() {
         stopHeartbeatAndWatchdog()
+        locationHelper?.stopLocationUpdates()
         voiceCommandHelper.stopListening()
         bciManager.disconnect()
         if (role == Role.CONTROLLER) sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
@@ -246,6 +253,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         wifi.unregister()
         voiceCommandHelper.stopListening()
         bciManager.disconnect()
+        locationHelper?.stopLocationUpdates()
         super.onStop()
     }
 
@@ -274,6 +282,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         emergencyRobotStop()
         voiceCommandHelper.destroy()
         bciManager.disconnect()
+        locationHelper?.stopLocationUpdates()
         socketLink.close()
         releaseControllerResources()
         releaseRobotResources()
@@ -380,7 +389,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         }
     }
 
-    @android.annotation.SuppressLint("MissingPermission")
+    @SuppressLint("MissingPermission")
     private fun showBciDevicePicker() {
         val pairedDevices = bciManager.getPairedDevices()
         if (pairedDevices.isEmpty()) {
@@ -452,14 +461,33 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
             if (!socketLink.isConnected()) {
                 ensurePermissionsAndDiscover(true)
+            } else {
+                startRobotLocationIfAllowed()
             }
         } else {
             exitEyesFullscreen()
+            locationHelper?.stopLocationUpdates()
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             setStatus("Modo controlador activo.")
             if (!socketLink.isConnected()) {
                 ensurePermissionsAndDiscover(false)
             }
+        }
+    }
+
+    private fun startRobotLocationIfAllowed() {
+        if (role != Role.ROBOT) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            if (locationHelper == null) {
+                locationHelper = LocationHelper(this) { lat, lng, speed ->
+                    if (socketLink.isConnected()) {
+                        socketLink.sendLine("LOC:$lat,$lng,$speed")
+                    }
+                }
+            }
+            locationHelper?.startLocationUpdates()
+        } else {
+            ensurePermissionsAndDiscover(true)
         }
     }
 
@@ -499,6 +527,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         releaseRobotVideoResources()
         motorController?.close()
         motorController = null
+        locationHelper?.stopLocationUpdates()
     }
 
     private fun releaseRobotVideoResources() {
@@ -611,6 +640,21 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun onSocketMessage(message: String) {
+        if (message.startsWith("LOC:")) {
+            if (role == Role.CONTROLLER) {
+                val parts = message.removePrefix("LOC:").split(",")
+                if (parts.size >= 2) {
+                    val lat = parts[0].take(7)
+                    val lng = parts[1].take(7)
+                    val speed = parts.getOrNull(2)?.toFloatOrNull() ?: 0f
+                    runOnUiThread {
+                        setStatus("GPS Robot: $lat, $lng (${String.format("%.1f", speed)} m/s)")
+                    }
+                }
+            }
+            return
+        }
+
         val remoteMessage = RemoteMessage.fromWire(message) ?: return
         when (role) {
             Role.ROBOT -> handleRobotMessage(remoteMessage)
@@ -713,17 +757,18 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private fun ensurePermissionsAndDiscover(includeCamera: Boolean) {
         val required = buildList {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
             if (includeCamera) add(Manifest.permission.CAMERA)
             if (Build.VERSION.SDK_INT >= 33) {
                 add(Manifest.permission.NEARBY_WIFI_DEVICES)
-            } else {
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
             }
         }
         val missing = required.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) {
             wifi.discoverPeers()
             if (pendingVideoStart && role == Role.ROBOT) startRobotVideoIfReady()
+            if (role == Role.ROBOT) startRobotLocationIfAllowed()
         } else {
             permissionLauncher.launch(missing.toTypedArray())
         }
@@ -748,9 +793,11 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 lastHeartbeatAt = SystemClock.elapsedRealtime()
                 setDetectionState(false, true)
                 startWatchdog()
+                startRobotLocationIfAllowed()
             }
         } else {
             stopHeartbeatAndWatchdog()
+            locationHelper?.stopLocationUpdates()
             if (role == Role.ROBOT) emergencyRobotStop("Socket de comandos desconectado.")
             txtWifiState.setChip("Wi‑Fi", ChipState.IDLE)
         }
@@ -865,6 +912,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         releaseControllerResources()
         releaseRobotVideoResources()
         videoRunning = false
+        locationHelper?.stopLocationUpdates()
     }
 
     private fun clearRemoteVideoFrame() {
