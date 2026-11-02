@@ -29,6 +29,7 @@ class VoiceCommandHelper(
     companion object {
         private const val TAG = "VoiceHelper"
         private const val MIN_ALERT_INTERVAL_MS = 4000L
+        private const val ECHO_GUARD_MS = 1000L
         private const val RESTART_DELAY_MS = 400L
         private const val MAX_RESTART_DELAY_MS = 5000L
 
@@ -57,6 +58,7 @@ class VoiceCommandHelper(
     private var consecutiveErrors = 0
     private var lastAlertText = ""
     private var lastAlertTime = 0L
+    private var lastSpeechEndMs = 0L
     private val pendingUtterances = AtomicInteger(0)
     private var focusRequest: AudioFocusRequest? = null
 
@@ -72,8 +74,11 @@ class VoiceCommandHelper(
 
     val isContinuousMode: Boolean get() = continuous
 
-    /** Solo ponlo en true si ya descargaste el español sin conexión; si no, no reconoce nada. */
-    var preferOffline = false
+    /**
+     * Usa el paquete de español sin conexión (más rápido y sin internet).
+     * Si el paquete no está disponible, cambia solo a reconocimiento por internet.
+     */
+    var preferOffline = true
 
     init {
         tts = TextToSpeech(context, this)
@@ -169,6 +174,17 @@ class VoiceCommandHelper(
         speak(text, urgent = true)
     }
 
+    /**
+     * Aviso informativo: solo habla si no hay otra frase en curso (no acumula cola)
+     * ni el usuario está dictando un comando. Devuelve true si habló.
+     */
+    fun speakIfIdle(text: String): Boolean {
+        if (!isTtsReady || isSpeaking) return false
+        if (isListening && !continuous) return false
+        speak(text, urgent = false)
+        return true
+    }
+
     private fun speak(text: String, urgent: Boolean) {
         if (!isTtsReady) return
 
@@ -196,10 +212,11 @@ class VoiceCommandHelper(
         pendingUtterances.set(0)
         mainHandler.post {
             isSpeaking = false
+            lastSpeechEndMs = SystemClock.elapsedRealtime()
             abandonFocus()
             if (pendingListen || continuous) {
                 pendingListen = false
-                scheduleListen(300L)
+                scheduleListen(600L)
             }
         }
     }
@@ -322,6 +339,12 @@ class VoiceCommandHelper(
                 onErrorOrStatus("Sin conexión para reconocer voz. Descarga el paquete de voz en español.")
             }
             12, 13 -> { // LANGUAGE_NOT_SUPPORTED / LANGUAGE_UNAVAILABLE (Android 12+)
+                if (preferOffline) {
+                    preferOffline = false
+                    onErrorOrStatus("Español sin conexión no disponible; usando internet.")
+                    scheduleListen(300L)
+                    return
+                }
                 continuous = false
                 onErrorOrStatus("Idioma de voz no disponible. Descarga el español en los ajustes de voz de Google.")
                 return
@@ -340,6 +363,11 @@ class VoiceCommandHelper(
         // Si CUALQUIER alternativa contiene una palabra de parada, se detiene
         if (matches.any { containsStop(it) }) {
             deliver(MovementCommand.STOP)
+            return
+        }
+        // Si el micrófono captó la propia voz del robot ("al centro", "a la izquierda"...), no moverse
+        if (isSpeaking || SystemClock.elapsedRealtime() - lastSpeechEndMs < ECHO_GUARD_MS) {
+            onErrorOrStatus("Ignorado: eco de la propia voz")
             return
         }
         val top = matches.firstOrNull().orEmpty()

@@ -62,6 +62,12 @@ class DirectControlActivity : AppCompatActivity() {
 
     // Movimiento iniciado por voz: dura poco y el freno autónomo también lo detiene
     private var voiceMovementActive = false
+
+    // Avisos hablados de objetos cercanos (mantén pulsado el botón Voz para activar/desactivar)
+    private var announceObjects = true
+    private var lastAnnouncedKey = ""
+    private var lastAnnouncedAtMs = 0L
+    private val announceMaxDistanceM = 2.5f
     private var voiceMovementCommand: MovementCommand? = null
     private val voiceMoveDurationMs = 2000L
     private val voiceStopRunnable = Runnable {
@@ -122,6 +128,8 @@ class DirectControlActivity : AppCompatActivity() {
             onCommandDetected = { command -> executeVoiceCommand(command) },
             onErrorOrStatus = { statusMessage -> setStatus(statusMessage) }
         )
+
+        voiceCommandHelper.ensureAudibleVolume()
 
         bciManager = BciBluetoothManager(
             context = this,
@@ -258,6 +266,13 @@ class DirectControlActivity : AppCompatActivity() {
             } else {
                 ensureAudioPermissionAndListen()
             }
+        }
+        btnVoiceCommand.setOnLongClickListener {
+            announceObjects = !announceObjects
+            val msg = if (announceObjects) "Avisos de objetos activados" else "Avisos de objetos desactivados"
+            setStatus(msg)
+            voiceCommandHelper.speakFeedback(msg)
+            true
         }
         btnBciConnect.setOnClickListener { ensureBluetoothPermissionAndPickDevice() }
     }
@@ -448,6 +463,7 @@ class DirectControlActivity : AppCompatActivity() {
         val spatialResult = spatialEngine.analyze(detections)
         lastSpatialResult = spatialResult
         radarView.updateSpatialData(spatialResult)
+        if (announceObjects) announceNearbyObjects(spatialResult)
 
         if (spatialResult.distanceMeters != null) {
             val distStr = String.format("%.2fm", spatialResult.distanceMeters)
@@ -473,6 +489,50 @@ class DirectControlActivity : AppCompatActivity() {
             if (movingForward) {
                 emergencyStop("Detenido por objeto cercano. Gire o retroceda.")
             }
+        }
+    }
+
+    private fun announceNearbyObjects(result: SpatialAnalysisResult) {
+        // Peligro mientras el robot se mueve: aviso urgente que interrumpe cualquier otra frase
+        val isMoving = activeMovementButtonId != View.NO_ID || voiceMovementActive
+        if (result.action == NavigationAction.FRENAR && isMoving) {
+            voiceCommandHelper.speakAlert("Obstáculo muy cerca")
+            return
+        }
+
+        val distance = result.distanceMeters ?: return
+        if (distance > announceMaxDistanceM) return
+
+        val now = SystemClock.elapsedRealtime()
+        val minInterval = if (voiceCommandHelper.isContinuousMode) 6000L else 3000L
+        val sinceLast = now - lastAnnouncedAtMs
+        if (sinceLast < minInterval) return
+
+        // Solo repite lo mismo cada 10 s; si cambia el lado o la distancia, avisa antes
+        val key = "${result.primaryZone}|${(distance / 0.5f).toInt()}"
+        if (key == lastAnnouncedKey && sinceLast < 10000L) return
+
+        val text = "${result.label ?: "Objeto"} ${zonePhrase(result.primaryZone)}, ${distancePhrase(distance)}"
+        if (voiceCommandHelper.speakIfIdle(text)) {
+            lastAnnouncedKey = key
+            lastAnnouncedAtMs = now
+        }
+    }
+
+    private fun zonePhrase(zone: String): String = when (zone) {
+        "Izquierda" -> "a la izquierda"
+        "Derecha" -> "a la derecha"
+        else -> "al centro"
+    }
+
+    private fun distancePhrase(meters: Float): String {
+        if (meters < 0.95f) return "a ${Math.round(meters * 10f) * 10} centímetros"
+        val half = Math.round(meters * 2f) / 2f
+        return if (half % 1f == 0f) {
+            val whole = half.toInt()
+            "a $whole ${if (whole == 1) "metro" else "metros"}"
+        } else {
+            "a ${"%.1f".format(half)} metros"
         }
     }
 
