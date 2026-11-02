@@ -34,6 +34,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -118,6 +119,12 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     // Último movimiento enviado por el controlador (botones, voz o BCI)
     private var lastSentCommand = MovementCommand.STOP
+
+    // Avisos hablados de objetos cercanos (mantén pulsado el botón de voz para activar/desactivar)
+    private var announceObjects = true
+    private var lastAnnouncedKey = ""
+    private var lastAnnouncedAtMs = 0L
+    private val announceMaxDistanceM = 2.5f
     private var lastSpatialResult: SpatialAnalysisResult? = null
     private var lastSpatialAtMs = 0L
 
@@ -191,6 +198,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_remote_control)
+        applySystemBarInsets()
         bindViews()
         wifi = WifiDirectController(this, this)
         socketLink = P2pSocketLink(::setStatus, ::onSocketMessage, ::onSocketConnectionChanged)
@@ -203,6 +211,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             onCommandDetected = { command -> executeVoiceCommand(command) },
             onErrorOrStatus = { msg -> setStatus(msg) }
         )
+
+        voiceCommandHelper.ensureAudibleVolume()
 
         bciManager = BciBluetoothManager(
             context = this,
@@ -387,6 +397,13 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             } else {
                 ensureAudioPermissionAndListen()
             }
+        }
+        btnRemoteVoice.setOnLongClickListener {
+            announceObjects = !announceObjects
+            val msg = if (announceObjects) "Avisos de objetos activados" else "Avisos de objetos desactivados"
+            setStatus(msg)
+            voiceCommandHelper.speakFeedback(msg)
+            true
         }
         btnBciConnectRemote.setOnClickListener { ensureBluetoothPermissionAndPickDevice() }
 
@@ -853,6 +870,67 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         showSystemBars()
     }
 
+    // La pantalla se dibuja bajo la barra de estado: se suma su alto al relleno del contenido
+    private fun applySystemBarInsets() {
+        val content = findViewById<View>(R.id.mainScroll) ?: return
+        val left = content.paddingLeft
+        val top = content.paddingTop
+        val right = content.paddingRight
+        val bottom = content.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(left + bars.left, top + bars.top, right + bars.right, bottom + bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(content)
+    }
+
+    private fun announceNearbyObjects(result: SpatialAnalysisResult) {
+        // Peligro mientras el robot se mueve: aviso urgente que interrumpe cualquier otra frase
+        val isMoving = lastSentCommand != MovementCommand.STOP
+        if (result.action == NavigationAction.FRENAR && isMoving) {
+            voiceCommandHelper.speakAlert("Obstáculo muy cerca")
+            return
+        }
+
+        val distance = result.distanceMeters ?: return
+        if (distance > announceMaxDistanceM) return
+
+        val now = SystemClock.elapsedRealtime()
+        val minInterval = if (voiceCommandHelper.isContinuousMode) 6000L else 3000L
+        val sinceLast = now - lastAnnouncedAtMs
+        if (sinceLast < minInterval) return
+
+        // Solo repite lo mismo cada 10 s; si cambia el lado o la distancia, avisa antes
+        val key = "${result.primaryZone}|${(distance / 0.5f).toInt()}"
+        if (key == lastAnnouncedKey && sinceLast < 10000L) return
+
+        val text = "${result.label ?: "Objeto"} ${zonePhrase(result.primaryZone)}, ${distancePhrase(distance)}"
+        if (voiceCommandHelper.speakIfIdle(text)) {
+            lastAnnouncedKey = key
+            lastAnnouncedAtMs = now
+        }
+    }
+
+    private fun zonePhrase(zone: String): String = when (zone) {
+        "Izquierda" -> "a la izquierda"
+        "Derecha" -> "a la derecha"
+        else -> "al centro"
+    }
+
+    private fun distancePhrase(meters: Float): String {
+        if (meters < 0.95f) return "a ${Math.round(meters * 10f) * 10} centímetros"
+        val half = Math.round(meters * 2f) / 2f
+        return if (half % 1f == 0f) {
+            val whole = half.toInt()
+            "a $whole ${if (whole == 1) "metro" else "metros"}"
+        } else {
+            "a ${"%.1f".format(half)} metros"
+        }
+    }
+
     private fun hideSystemBars() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).let { controller ->
@@ -952,6 +1030,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             lastSpatialResult = spatialResult
             lastSpatialAtMs = now
             radarView.updateSpatialData(spatialResult)
+            if (announceObjects) runOnUiThread { announceNearbyObjects(spatialResult) }
 
             if (spatialResult.distanceMeters != null) {
                 val distStr = String.format("%.2fm", spatialResult.distanceMeters)
