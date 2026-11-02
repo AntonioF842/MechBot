@@ -44,6 +44,7 @@ dependencies {
     implementation("androidx.camera:camera-view:1.6.1")
     implementation("com.google.mlkit:object-detection:17.0.2")
     implementation("com.google.android.gms:play-services-location:21.0.1")
+    implementation("com.google.android.gms:play-services-maps:18.2.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)

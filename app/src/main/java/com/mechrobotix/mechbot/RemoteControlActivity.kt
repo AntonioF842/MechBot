@@ -37,10 +37,17 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.GoogleMap
+import com.google.android.gms.maps.OnMapReadyCallback
+import com.google.android.gms.maps.SupportMapFragment
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.Marker
+import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 
-class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks {
+class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks, OnMapReadyCallback {
     private enum class Role { NONE, CONTROLLER, ROBOT }
     private enum class ChipState { IDLE, BUSY, OK, ERROR }
 
@@ -53,6 +60,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var voiceCommandHelper: VoiceCommandHelper
     private lateinit var bciManager: BciBluetoothManager
     private var locationHelper: LocationHelper? = null
+
+    private var googleMap: GoogleMap? = null
+    private var robotMarker: Marker? = null
 
     private lateinit var txtStatus: TextView
     private lateinit var txtWifiState: TextView
@@ -170,6 +180,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         wifi = WifiDirectController(this, this)
         socketLink = P2pSocketLink(::setStatus, ::onSocketMessage, ::onSocketConnectionChanged)
 
+        val mapFragment = supportFragmentManager.findFragmentById(R.id.mapFragment) as? SupportMapFragment
+        mapFragment?.getMapAsync(this)
+
         voiceCommandHelper = VoiceCommandHelper(
             context = this,
             onCommandDetected = { command ->
@@ -211,6 +224,30 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         savedInstanceState?.getString(KEY_ROLE)?.let {
             runCatching { Role.valueOf(it) }.getOrNull()
         }?.takeIf { it != Role.NONE }?.let(::selectRole)
+    }
+
+    override fun onMapReady(map: GoogleMap) {
+        googleMap = map
+        googleMap?.uiSettings?.isZoomControlsEnabled = true
+    }
+
+    private fun updateRobotLocationOnMap(latitude: Double, longitude: Double, speedMps: Float) {
+        val position = LatLng(latitude, longitude)
+        runOnUiThread {
+            if (robotMarker == null) {
+                robotMarker = googleMap?.addMarker(
+                    MarkerOptions()
+                        .position(position)
+                        .title("MechBot Silla/Robot")
+                        .snippet(String.format("Velocidad: %.1f m/s", speedMps))
+                )
+                googleMap?.moveCamera(CameraUpdateFactory.newLatLngZoom(position, 17f))
+            } else {
+                robotMarker?.position = position
+                robotMarker?.snippet = String.format("Velocidad: %.1f m/s", speedMps)
+                googleMap?.animateCamera(CameraUpdateFactory.newLatLng(position))
+            }
+        }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -644,11 +681,14 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             if (role == Role.CONTROLLER) {
                 val parts = message.removePrefix("LOC:").split(",")
                 if (parts.size >= 2) {
-                    val lat = parts[0].take(7)
-                    val lng = parts[1].take(7)
+                    val lat = parts[0].toDoubleOrNull()
+                    val lng = parts[1].toDoubleOrNull()
                     val speed = parts.getOrNull(2)?.toFloatOrNull() ?: 0f
-                    runOnUiThread {
-                        setStatus("GPS Robot: $lat, $lng (${String.format("%.1f", speed)} m/s)")
+                    if (lat != null && lng != null) {
+                        updateRobotLocationOnMap(lat, lng, speed)
+                        runOnUiThread {
+                            setStatus(String.format("GPS Robot: %.5f, %.5f (%.1f m/s)", lat, lng, speed))
+                        }
                     }
                 }
             }
