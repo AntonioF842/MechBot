@@ -13,6 +13,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.TextView
 import androidx.activity.OnBackPressedCallback
@@ -21,6 +22,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 
@@ -57,6 +60,15 @@ class DirectControlActivity : AppCompatActivity() {
     private val spatialEngine = SpatialNavigationEngine()
     private var lastSpatialResult: SpatialAnalysisResult? = null
 
+    // Movimiento iniciado por voz: dura poco y el freno autónomo también lo detiene
+    private var voiceMovementActive = false
+    private var voiceMovementCommand: MovementCommand? = null
+    private val voiceMoveDurationMs = 2000L
+    private val voiceStopRunnable = Runnable {
+        cameraController.setCameraLens(false)
+        emergencyStop("Movimiento por voz finalizado")
+    }
+
     private val cameraPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -74,7 +86,7 @@ class DirectControlActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            voiceCommandHelper.startListening()
+            activateVoiceListening()
         } else {
             setStatus("Permiso de micrófono denegado para comandos de voz.")
         }
@@ -93,6 +105,7 @@ class DirectControlActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_direct_control)
+        applySystemBarInsets()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         bindViews()
 
@@ -134,6 +147,7 @@ class DirectControlActivity : AppCompatActivity() {
     override fun onPause() {
         emergencyStop()
         voiceCommandHelper.stopListening()
+        updateVoiceButton()
         bciManager.disconnect()
         super.onPause()
     }
@@ -142,6 +156,7 @@ class DirectControlActivity : AppCompatActivity() {
         emergencyStop()
         cameraController.stop()
         voiceCommandHelper.stopListening()
+        updateVoiceButton()
         bciManager.disconnect()
         super.onStop()
     }
@@ -165,6 +180,23 @@ class DirectControlActivity : AppCompatActivity() {
         cameraController.close()
         motorController.close()
         super.onDestroy()
+    }
+
+    // La pantalla se dibuja bajo la barra de estado: se suma su alto al relleno del layout
+    private fun applySystemBarInsets() {
+        val root = findViewById<ViewGroup>(android.R.id.content).getChildAt(0) ?: return
+        val left = root.paddingLeft
+        val top = root.paddingTop
+        val right = root.paddingRight
+        val bottom = root.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            view.setPadding(left + bars.left, top + bars.top, right + bars.right, bottom + bars.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     private fun bindViews() {
@@ -219,16 +251,36 @@ class DirectControlActivity : AppCompatActivity() {
         }
         btnStop.setOnClickListener { emergencyStop("STOP activado.") }
 
-        btnVoiceCommand.setOnClickListener { ensureAudioPermissionAndListen() }
+        btnVoiceCommand.setOnClickListener {
+            if (voiceCommandHelper.isContinuousMode) {
+                voiceCommandHelper.setContinuous(false)
+                updateVoiceButton()
+            } else {
+                ensureAudioPermissionAndListen()
+            }
+        }
         btnBciConnect.setOnClickListener { ensureBluetoothPermissionAndPickDevice() }
     }
 
     private fun ensureAudioPermissionAndListen() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            voiceCommandHelper.startListening()
+            activateVoiceListening()
         } else {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
+    }
+
+    private fun activateVoiceListening() {
+        voiceCommandHelper.setContinuous(true)
+        updateVoiceButton()
+    }
+
+    private fun updateVoiceButton() {
+        val on = voiceCommandHelper.isContinuousMode
+        btnVoiceCommand.backgroundTintList = ColorStateList.valueOf(
+            color(if (on) R.color.accent else R.color.accent_dark)
+        )
+        btnVoiceCommand.setTextColor(color(if (on) R.color.bg_dark else R.color.text_primary))
     }
 
     private fun ensureBluetoothPermissionAndPickDevice() {
@@ -285,6 +337,13 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun executeVoiceCommand(command: MovementCommand) {
+        // STOP por voz siempre se obedece
+        if (command == MovementCommand.STOP) {
+            cameraController.setCameraLens(false)
+            emergencyStop("STOP por voz")
+            return
+        }
+
         if (lastSpatialResult?.action == NavigationAction.FRENAR && command == MovementCommand.FORWARD) {
             emergencyStop("Voz Bloqueada: Obstáculo cercano al frente. Comando '$command' rechazado.")
             return
@@ -292,6 +351,10 @@ class DirectControlActivity : AppCompatActivity() {
 
         cameraController.setCameraLens(command == MovementCommand.BACKWARD)
         txtMovement.text = "Voz: ${command.displayName}"
+        voiceMovementActive = true
+        voiceMovementCommand = command
+        txtMovement.removeCallbacks(voiceStopRunnable)
+        txtMovement.postDelayed(voiceStopRunnable, voiceMoveDurationMs)
         if (motorController.isReady()) {
             motorController.send(command)
             setStatus("Comando de voz enviado al HID: ${command.displayName}")
@@ -345,6 +408,9 @@ class DirectControlActivity : AppCompatActivity() {
 
     private fun clearActiveMovement() {
         activeMovementButtonId = View.NO_ID
+        voiceMovementActive = false
+        voiceMovementCommand = null
+        txtMovement.removeCallbacks(voiceStopRunnable)
         txtMovement.text = "Detenido"
         updateDirectionButtons()
     }
@@ -402,7 +468,9 @@ class DirectControlActivity : AppCompatActivity() {
                 triggerObstacleVibration()
             }
 
-            if (activeMovementButtonId == R.id.btnForward) {
+            val movingForward = activeMovementButtonId == R.id.btnForward ||
+                    (voiceMovementActive && voiceMovementCommand == MovementCommand.FORWARD)
+            if (movingForward) {
                 emergencyStop("Detenido por objeto cercano. Gire o retroceda.")
             }
         }
@@ -429,6 +497,7 @@ class DirectControlActivity : AppCompatActivity() {
         txtDetectionState.setChip("Detección", ChipState.BUSY)
         txtMovement.text = "Detenido"
         updateDirectionButtons()
+        updateVoiceButton()
     }
 
     private fun handleComponentStatus(message: String) {

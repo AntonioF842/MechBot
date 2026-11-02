@@ -116,6 +116,21 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var lastVibrationTime = 0L
     private val spatialEngine = SpatialNavigationEngine()
 
+    // Último movimiento enviado por el controlador (botones, voz o BCI)
+    private var lastSentCommand = MovementCommand.STOP
+    private var lastSpatialResult: SpatialAnalysisResult? = null
+    private var lastSpatialAtMs = 0L
+
+    // Movimiento por voz: dura poco y se detiene solo
+    private val voiceMoveDurationMs = 2000L
+    private val voiceStopRunnable = Runnable {
+        when (role) {
+            Role.CONTROLLER -> sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
+            Role.ROBOT -> emergencyRobotStop("Movimiento por voz finalizado")
+            Role.NONE -> Unit
+        }
+    }
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
@@ -135,7 +150,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted) {
-            voiceCommandHelper.startListening()
+            activateVoiceListening()
         } else {
             setStatus("Permiso de micrófono denegado para comandos de voz.")
         }
@@ -185,18 +200,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         voiceCommandHelper = VoiceCommandHelper(
             context = this,
-            onCommandDetected = { command ->
-                if (role == Role.CONTROLLER) {
-                    if (socketLink.isConnected()) {
-                        sendRemoteMessage(RemoteMessage.Movement(command))
-                        setStatus("Voz enviada: ${command.displayName}")
-                    } else {
-                        setStatus("Voz reconocida (Sin conexión): ${command.displayName}")
-                    }
-                } else if (role == Role.ROBOT) {
-                    handleRobotMovement(command)
-                }
-            },
+            onCommandDetected = { command -> executeVoiceCommand(command) },
             onErrorOrStatus = { msg -> setStatus(msg) }
         )
 
@@ -265,6 +269,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     override fun onResume() {
         super.onResume()
         spatialEngine.reset()
+        updateVoiceButton()
         if (role == Role.ROBOT) {
             motorController?.prepare()
             if (socketLink.isConnected()) {
@@ -280,6 +285,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         stopHeartbeatAndWatchdog()
         locationHelper?.stopLocationUpdates()
         voiceCommandHelper.stopListening()
+        updateVoiceButton()
+        mainHandler.removeCallbacks(voiceStopRunnable)
         bciManager.disconnect()
         if (role == Role.CONTROLLER) sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
         if (role == Role.ROBOT) emergencyRobotStop()
@@ -289,6 +296,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     override fun onStop() {
         wifi.unregister()
         voiceCommandHelper.stopListening()
+        updateVoiceButton()
         bciManager.disconnect()
         locationHelper?.stopLocationUpdates()
         super.onStop()
@@ -372,7 +380,14 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         switchRemoteDetection.setOnCheckedChangeListener { _, enabled ->
             if (!updatingDetectionSwitches && role == Role.CONTROLLER) requestRemoteDetection(enabled)
         }
-        btnRemoteVoice.setOnClickListener { ensureAudioPermissionAndListen() }
+        btnRemoteVoice.setOnClickListener {
+            if (voiceCommandHelper.isContinuousMode) {
+                voiceCommandHelper.setContinuous(false)
+                updateVoiceButton()
+            } else {
+                ensureAudioPermissionAndListen()
+            }
+        }
         btnBciConnectRemote.setOnClickListener { ensureBluetoothPermissionAndPickDevice() }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -406,9 +421,62 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private fun ensureAudioPermissionAndListen() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            voiceCommandHelper.startListening()
+            activateVoiceListening()
         } else {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun activateVoiceListening() {
+        voiceCommandHelper.setContinuous(true)
+        updateVoiceButton()
+    }
+
+    private fun updateVoiceButton() {
+        val on = voiceCommandHelper.isContinuousMode
+        btnRemoteVoice.backgroundTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(this, if (on) R.color.accent else R.color.accent_dark)
+        )
+        btnRemoteVoice.setTextColor(
+            ContextCompat.getColor(this, if (on) R.color.bg_dark else R.color.text_primary)
+        )
+    }
+
+    private fun executeVoiceCommand(command: MovementCommand) {
+        mainHandler.removeCallbacks(voiceStopRunnable)
+
+        // STOP por voz siempre se obedece
+        if (command == MovementCommand.STOP) {
+            when (role) {
+                Role.CONTROLLER -> sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
+                Role.ROBOT -> emergencyRobotStop("STOP por voz")
+                Role.NONE -> Unit
+            }
+            return
+        }
+
+        when (role) {
+            Role.CONTROLLER -> {
+                val obstacleAhead = lastSpatialResult?.action == NavigationAction.FRENAR &&
+                        SystemClock.elapsedRealtime() - lastSpatialAtMs < 1000L
+                if (command == MovementCommand.FORWARD && obstacleAhead) {
+                    sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
+                    setStatus("Voz bloqueada: obstáculo cercano al frente.")
+                    return
+                }
+                if (socketLink.isConnected()) {
+                    sendRemoteMessage(RemoteMessage.Movement(command))
+                    setStatus("Voz enviada: ${command.displayName}")
+                    mainHandler.postDelayed(voiceStopRunnable, voiceMoveDurationMs)
+                } else {
+                    setStatus("Voz reconocida (Sin conexión): ${command.displayName}")
+                }
+            }
+            Role.ROBOT -> {
+                handleRobotMovement(command)
+                mainHandler.postDelayed(voiceStopRunnable, voiceMoveDurationMs)
+            }
+            Role.NONE -> Unit
         }
     }
 
@@ -457,7 +525,10 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private fun bindMovementButton(id: Int, command: MovementCommand) {
         findViewById<Button>(id).setOnTouchListener { _, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> sendRemoteMessage(RemoteMessage.Movement(command))
+                MotionEvent.ACTION_DOWN -> {
+                    mainHandler.removeCallbacks(voiceStopRunnable)
+                    sendRemoteMessage(RemoteMessage.Movement(command))
+                }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
             }
             true
@@ -819,6 +890,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             if (message !is RemoteMessage.Ping) setStatus("Aún no hay socket de comandos.")
             return false
         }
+        if (message is RemoteMessage.Movement) lastSentCommand = message.command
         return true
     }
 
@@ -877,6 +949,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         if (frame.detectionEnabled) {
             detectionOverlay.setFrame(frame.detections, frame.bitmap.width, frame.bitmap.height)
             val spatialResult = spatialEngine.analyze(frame.detections)
+            lastSpatialResult = spatialResult
+            lastSpatialAtMs = now
             radarView.updateSpatialData(spatialResult)
 
             if (spatialResult.distanceMeters != null) {
@@ -898,7 +972,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
 
                 if (role == Role.CONTROLLER && socketLink.isConnected()) {
-                    if (lastRobotCommand == MovementCommand.FORWARD) {
+                    if (lastSentCommand == MovementCommand.FORWARD) {
                         sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
                         setStatus("Objeto cercano al frente. Gire o retroceda.")
                     }
@@ -906,6 +980,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             }
         } else {
             detectionOverlay.clear()
+            lastSpatialResult = null
             txtDetectionSummary.text = "Detección desactivada"
             radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
         }
