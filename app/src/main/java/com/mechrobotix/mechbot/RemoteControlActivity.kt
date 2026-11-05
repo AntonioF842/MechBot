@@ -35,20 +35,19 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import java.io.File
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.GoogleMap
-import com.google.android.gms.maps.OnMapReadyCallback
-import com.google.android.gms.maps.SupportMapFragment
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.Marker
-import com.google.android.gms.maps.model.MarkerOptions
+import org.osmdroid.config.Configuration as OsmConfiguration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
 
-class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks, OnMapReadyCallback {
+class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callbacks {
     private enum class Role { NONE, CONTROLLER, ROBOT }
     private enum class ChipState { IDLE, BUSY, OK, ERROR }
 
@@ -62,7 +61,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private lateinit var bciManager: BciBluetoothManager
     private var locationHelper: LocationHelper? = null
 
-    private var googleMap: GoogleMap? = null
+    private lateinit var mapView: MapView
     private var robotMarker: Marker? = null
 
     private lateinit var txtStatus: TextView
@@ -197,14 +196,20 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // OpenStreetMap (osmdroid): no necesita API key. Debe configurarse antes de inflar el layout.
+        OsmConfiguration.getInstance().apply {
+            load(applicationContext, applicationContext.getSharedPreferences("osmdroid", MODE_PRIVATE))
+            userAgentValue = packageName
+            osmdroidBasePath = File(cacheDir, "osmdroid")
+            osmdroidTileCache = File(cacheDir, "osmdroid/tiles")
+        }
         setContentView(R.layout.activity_remote_control)
         applySystemBarInsets()
         bindViews()
         wifi = WifiDirectController(this, this)
         socketLink = P2pSocketLink(::setStatus, ::onSocketMessage, ::onSocketConnectionChanged)
 
-        val mapFragment = supportFragmentManager.findFragmentById(R.id.mapFragment) as? SupportMapFragment
-        mapFragment?.getMapAsync(this)
+        setupMap()
 
         voiceCommandHelper = VoiceCommandHelper(
             context = this,
@@ -240,27 +245,37 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         }?.takeIf { it != Role.NONE }?.let(::selectRole)
     }
 
-    override fun onMapReady(map: GoogleMap) {
-        googleMap = map
-        googleMap?.uiSettings?.isZoomControlsEnabled = true
+    private fun setupMap() {
+        mapView = findViewById(R.id.mapView)
+        mapView.setTileSource(TileSourceFactory.MAPNIK)
+        mapView.setMultiTouchControls(true)
+        mapView.controller.setZoom(3.0)
+        // Dentro del ScrollView: el mapa debe recibir los gestos de arrastre
+        mapView.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE ->
+                    view.parent.requestDisallowInterceptTouchEvent(true)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    view.parent.requestDisallowInterceptTouchEvent(false)
+            }
+            false
+        }
     }
 
     private fun updateRobotLocationOnMap(latitude: Double, longitude: Double, speedMps: Float) {
-        val position = LatLng(latitude, longitude)
+        val position = GeoPoint(latitude, longitude)
         runOnUiThread {
-            if (robotMarker == null) {
-                robotMarker = googleMap?.addMarker(
-                    MarkerOptions()
-                        .position(position)
-                        .title("MechBot Silla/Robot")
-                        .snippet(String.format("Velocidad: %.1f m/s", speedMps))
-                )
-                googleMap?.moveCamera(CameraUpdateFactory.newLatLngZoom(position, 17f))
-            } else {
-                robotMarker?.position = position
-                robotMarker?.snippet = String.format("Velocidad: %.1f m/s", speedMps)
-                googleMap?.animateCamera(CameraUpdateFactory.newLatLng(position))
-            }
+            val marker = robotMarker ?: Marker(mapView).apply {
+                title = "MechBot Silla/Robot"
+                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                mapView.overlays.add(this)
+                mapView.controller.setZoom(17.0) // primera ubicación: acercar
+            }.also { robotMarker = it }
+
+            marker.position = position
+            marker.snippet = String.format("Velocidad: %.1f m/s", speedMps)
+            mapView.controller.animateTo(position)
+            mapView.invalidate()
         }
     }
 
@@ -280,6 +295,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         super.onResume()
         spatialEngine.reset()
         updateVoiceButton()
+        mapView.onResume()
         if (role == Role.ROBOT) {
             motorController?.prepare()
             if (socketLink.isConnected()) {
@@ -297,6 +313,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         voiceCommandHelper.stopListening()
         updateVoiceButton()
         mainHandler.removeCallbacks(voiceStopRunnable)
+        mapView.onPause()
         bciManager.disconnect()
         if (role == Role.CONTROLLER) sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
         if (role == Role.ROBOT) emergencyRobotStop()
@@ -342,6 +359,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         releaseControllerResources()
         releaseRobotResources()
         clearRemoteVideoFrame()
+        mapView.onDetach()
         super.onDestroy()
     }
 
