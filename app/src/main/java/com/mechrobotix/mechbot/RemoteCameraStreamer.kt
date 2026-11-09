@@ -51,6 +51,12 @@ class RemoteCameraStreamer(
     @Volatile private var running = false
     @Volatile private var closed = false
     @Volatile private var detectionEnabled = false
+
+    // Detección interna para el freno de seguridad del robot (independiente del interruptor del controlador)
+    @Volatile private var safetyDetectionEnabled = false
+
+    /** Se invoca (en el hilo de detección) con cada lectura válida de objetos de la cámara del robot. */
+    @Volatile var onDetections: ((List<DetectionResult>) -> Unit)? = null
     @Volatile private var detectionGeneration = 0L
     @Volatile private var sessionId = 0L
 
@@ -68,6 +74,20 @@ class RemoteCameraStreamer(
     }
 
     fun isDetectionEnabled(): Boolean = detectionEnabled
+
+    /** Mantiene la detección corriendo aunque el controlador la tenga apagada, solo para frenar. */
+    fun setSafetyDetectionEnabled(enabled: Boolean) {
+        if (safetyDetectionEnabled == enabled) return
+        safetyDetectionEnabled = enabled
+        if (!detectionEnabled) {
+            detectionGeneration++
+            smoother.reset()
+            latestDetections = emptyList()
+            lastDetectionFrameTime = 0L
+        }
+    }
+
+    private fun detectionWanted(): Boolean = detectionEnabled || safetyDetectionEnabled
 
     fun setCameraLens(useBackwardLens: Boolean) {
         if (this.useBackwardLens == useBackwardLens) return
@@ -193,7 +213,7 @@ class RemoteCameraStreamer(
         } catch (error: RejectedExecutionException) {
             reportEncodingError(error, now, session)
         }
-        val shouldDetect = detectionEnabled &&
+        val shouldDetect = detectionWanted() &&
                 now - lastDetectionFrameTime >= DETECTION_FRAME_INTERVAL_MS &&
                 detectionBusy.compareAndSet(false, true)
         if (!shouldDetect) {
@@ -207,12 +227,15 @@ class RemoteCameraStreamer(
                 imageProxy = image,
                 mirror = mirrored,
                 onResult = { rawDetections ->
-                    if (isActive(session) && detectionEnabled && generation == detectionGeneration) {
-                        latestDetections = smoother.update(rawDetections, SystemClock.elapsedRealtime())
+                    if (isActive(session) && detectionWanted() && generation == detectionGeneration) {
+                        val smoothed = smoother.update(rawDetections, SystemClock.elapsedRealtime())
+                        latestDetections = smoothed
+                        // Solo las lecturas correctas alimentan el freno: un fallo de ML Kit no cuenta como "camino libre"
+                        onDetections?.invoke(smoothed)
                     }
                 },
                 onFailure = { error ->
-                    if (isActive(session) && detectionEnabled && generation == detectionGeneration) {
+                    if (isActive(session) && detectionWanted() && generation == detectionGeneration) {
                         latestDetections = smoother.update(emptyList(), SystemClock.elapsedRealtime())
                         reportDetectionError(error, SystemClock.elapsedRealtime(), session)
                     }
@@ -227,7 +250,7 @@ class RemoteCameraStreamer(
             image.close()
             detectionBusy.set(false)
             if (closed) closeDetectionResources()
-            if (isActive(session) && detectionEnabled && generation == detectionGeneration) {
+            if (isActive(session) && detectionWanted() && generation == detectionGeneration) {
                 latestDetections = smoother.update(emptyList(), SystemClock.elapsedRealtime())
                 reportDetectionError(error, SystemClock.elapsedRealtime(), session)
             }

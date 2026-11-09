@@ -103,6 +103,15 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var isEyesFullscreen = false
     private var isRobotTestMode = false
     private var lastRobotCommand = MovementCommand.STOP
+
+    // Freno local del robot: usa las detecciones de SU cámara, sin depender de la red
+    private val robotSpatialEngine = SpatialNavigationEngine()
+    private var lastRobotSpatialResult: SpatialAnalysisResult? = null
+    private var lastRobotSpatialAtMs = 0L
+    private var lastRobotDetectionAtMs = 0L
+    private var forwardStartedAtMs = 0L
+    private var robotSafetyActive = false
+    private var robotUsingBackwardLens = false
     private var latestConnectionInfo: WifiP2pInfo? = null
     private var peers: List<WifiP2pDevice> = emptyList()
     private var lastNotice: String? = null
@@ -191,6 +200,21 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
                 mainHandler.postDelayed(this, WATCHDOG_INTERVAL_MS)
             }
+        }
+    }
+
+    // Si el robot avanza y la cámara deja de entregar lecturas, se detiene
+    private val forwardSafetyRunnable = object : Runnable {
+        override fun run() {
+            if (role != Role.ROBOT || lastRobotCommand != MovementCommand.FORWARD || !robotSafetyActive) return
+            val now = SystemClock.elapsedRealtime()
+            val lastFeed = maxOf(lastRobotDetectionAtMs, forwardStartedAtMs)
+            if (now - lastFeed > ROBOT_DETECTION_STALE_MS) {
+                emergencyRobotStop("Robot detenido: la cámara dejó de entregar lecturas.")
+                notifyControllerBrake("cámara sin lecturas")
+                return
+            }
+            mainHandler.postDelayed(this, ROBOT_SAFETY_CHECK_MS)
         }
     }
 
@@ -647,6 +671,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private fun ensureRobotVideoResources(): Pair<VideoFrameSender, RemoteCameraStreamer> {
         val sender = frameSender ?: VideoFrameSender(::setStatus).also { frameSender = it }
         val streamer = cameraStreamer ?: RemoteCameraStreamer(this, this, ::setStatus).also {
+            it.onDetections = ::onRobotDetections
             cameraStreamer = it
         }
         return sender to streamer
@@ -674,6 +699,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun releaseRobotVideoResources() {
+        robotSafetyActive = false
         cameraStreamer?.close()
         cameraStreamer = null
         frameSender?.stop()
@@ -736,6 +762,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         sender.start(info, socketLink)
         streamer.setDetectionEnabled(remoteDetectionEnabled)
+        streamer.setSafetyDetectionEnabled(true)
+        robotSafetyActive = true
         streamer.start(sender)
         videoRunning = true
         txtRobotHint.text = "Transmitiendo video"
@@ -745,6 +773,9 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private fun stopRobotVideo() {
         pendingVideoStart = false
         videoRunning = false
+        if (lastRobotCommand == MovementCommand.FORWARD) {
+            emergencyRobotStop("Video detenido: robot detenido por seguridad.")
+        }
         releaseRobotVideoResources()
         txtRobotHint.text = "Video detenido"
         txtVideoState.setChip("Video", ChipState.IDLE)
@@ -801,6 +832,19 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             return
         }
 
+        if (message.startsWith("BRAKE:")) {
+            if (role == Role.CONTROLLER) {
+                val reason = message.removePrefix("BRAKE:")
+                runOnUiThread {
+                    lastSentCommand = MovementCommand.STOP
+                    mainHandler.removeCallbacks(voiceStopRunnable)
+                    setStatus("Robot detenido por seguridad: $reason")
+                    voiceCommandHelper.speakAlert("Robot detenido por obstáculo")
+                }
+            }
+            return
+        }
+
         val remoteMessage = RemoteMessage.fromWire(message) ?: return
         when (role) {
             Role.ROBOT -> handleRobotMessage(remoteMessage)
@@ -836,8 +880,56 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         }
     }
 
+    // Llamado desde el hilo de detección de la cámara del robot
+    private fun onRobotDetections(detections: List<DetectionResult>) {
+        runOnUiThread {
+            if (role != Role.ROBOT) return@runOnUiThread
+            val now = SystemClock.elapsedRealtime()
+            val result = robotSpatialEngine.analyze(detections)
+            lastRobotDetectionAtMs = now
+            lastRobotSpatialResult = result
+            lastRobotSpatialAtMs = now
+            if (lastRobotCommand == MovementCommand.FORWARD && result.action == NavigationAction.FRENAR) {
+                val distance = result.distanceMeters?.let { String.format("a %.1f m", it) } ?: "cercano"
+                emergencyRobotStop("Robot detenido por obstáculo $distance")
+                notifyControllerBrake("obstáculo $distance")
+            }
+        }
+    }
+
+    private fun robotObstacleAhead(): Boolean {
+        val result = lastRobotSpatialResult ?: return false
+        return robotSafetyActive &&
+                result.action == NavigationAction.FRENAR &&
+                SystemClock.elapsedRealtime() - lastRobotSpatialAtMs < ROBOT_OBSTACLE_VALID_MS
+    }
+
+    private fun notifyControllerBrake(reason: String) {
+        if (socketLink.isConnected()) socketLink.sendLine("BRAKE:$reason")
+    }
+
     private fun handleRobotMovement(command: MovementCommand) {
+        // Al cambiar de lente, las lecturas anteriores describen otra dirección y ya no sirven
+        val backwardLens = command == MovementCommand.BACKWARD
+        if (backwardLens != robotUsingBackwardLens) {
+            robotUsingBackwardLens = backwardLens
+            robotSpatialEngine.reset()
+            lastRobotSpatialResult = null
+            lastRobotDetectionAtMs = 0L
+        }
+
+        if (command == MovementCommand.FORWARD && robotObstacleAhead()) {
+            emergencyRobotStop("Avance bloqueado: obstáculo cercano al frente del robot.")
+            notifyControllerBrake("avance bloqueado")
+            return
+        }
+
         lastRobotCommand = command
+        if (command == MovementCommand.FORWARD) {
+            forwardStartedAtMs = SystemClock.elapsedRealtime()
+            mainHandler.removeCallbacks(forwardSafetyRunnable)
+            mainHandler.postDelayed(forwardSafetyRunnable, ROBOT_SAFETY_CHECK_MS)
+        }
         robotEyes.react(command)
         robotEyesFull.react(command)
         txtRobotHint.text = command.displayName
@@ -852,6 +944,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun emergencyRobotStop(message: String? = null) {
+        mainHandler.removeCallbacks(forwardSafetyRunnable)
         lastRobotCommand = MovementCommand.STOP
         motorController?.takeIf { it.isReady() }?.send(MovementCommand.STOP)
         if (::robotEyes.isInitialized) robotEyes.react(MovementCommand.STOP)
@@ -1241,5 +1334,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         private const val HEARTBEAT_INTERVAL_MS = 650L
         private const val HEARTBEAT_TIMEOUT_MS = 1808L
         private const val WATCHDOG_INTERVAL_MS = 300L
+        private const val ROBOT_SAFETY_CHECK_MS = 250L
+        private const val ROBOT_DETECTION_STALE_MS = 2000L
+        private const val ROBOT_OBSTACLE_VALID_MS = 1000L
     }
 }
