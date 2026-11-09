@@ -143,7 +143,8 @@ class RemoteCameraStreamer(
                     .build()
                 imageAnalysis = analysis
                 analysis.setAnalyzer(cameraExecutor) { image ->
-                    analyze(image, isFrontCamera, sender, session)
+                    // La cámara frontal del robot mira al frente: no se espeja (el espejo es para selfies)
+                    analyze(image, isFrontCamera && MIRROR_FRONT_FRAMES, sender, session)
                 }
                 provider.unbindAll()
                 provider.bindToLifecycle(lifecycleOwner, selector, analysis)
@@ -315,6 +316,9 @@ class RemoteCameraStreamer(
         private const val VIDEO_FRAME_INTERVAL_MS = 100L
         private const val DETECTION_FRAME_INTERVAL_MS = 140L
         private const val ERROR_INTERVAL_MS = 3000L
+
+        // Ponlo en true solo si algún día quieres ver la cámara frontal como espejo
+        private const val MIRROR_FRONT_FRAMES = false
 
         private fun namedThreadFactory(name: String): ThreadFactory = ThreadFactory { runnable ->
             Thread(runnable, name)

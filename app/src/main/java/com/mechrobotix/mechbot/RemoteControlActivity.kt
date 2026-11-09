@@ -105,7 +105,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var lastRobotCommand = MovementCommand.STOP
 
     // Freno local del robot: usa las detecciones de SU cámara, sin depender de la red
-    private val robotSpatialEngine = SpatialNavigationEngine()
+    private val robotSpatialEngine = SpatialNavigationEngine(CameraProfiles.FRONT_CAMERA)
     private var lastRobotSpatialResult: SpatialAnalysisResult? = null
     private var lastRobotSpatialAtMs = 0L
     private var lastRobotDetectionAtMs = 0L
@@ -123,7 +123,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var bciEnabled = false
     private var lastHeartbeatAt = 0L
     private var lastVibrationTime = 0L
-    private val spatialEngine = SpatialNavigationEngine()
+    private val spatialEngine = SpatialNavigationEngine(CameraProfiles.FRONT_CAMERA)
 
     // Último movimiento enviado por el controlador (botones, voz o BCI)
     private var lastSentCommand = MovementCommand.STOP
@@ -913,6 +913,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         val backwardLens = command == MovementCommand.BACKWARD
         if (backwardLens != robotUsingBackwardLens) {
             robotUsingBackwardLens = backwardLens
+            robotSpatialEngine.geometry = if (backwardLens) CameraProfiles.REAR_CAMERA else CameraProfiles.FRONT_CAMERA
             robotSpatialEngine.reset()
             lastRobotSpatialResult = null
             lastRobotDetectionAtMs = 0L
@@ -1137,6 +1138,16 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         if (frame.detectionEnabled) {
             detectionOverlay.setFrame(frame.detections, frame.bitmap.width, frame.bitmap.height)
+            // El robot usa la cámara trasera solo al retroceder; en cualquier otro comando, la frontal
+            val frameGeometry = if (lastSentCommand == MovementCommand.BACKWARD) {
+                CameraProfiles.REAR_CAMERA
+            } else {
+                CameraProfiles.FRONT_CAMERA
+            }
+            if (spatialEngine.geometry != frameGeometry) {
+                spatialEngine.geometry = frameGeometry
+                spatialEngine.reset()
+            }
             val spatialResult = spatialEngine.analyze(frame.detections)
             lastSpatialResult = spatialResult
             lastSpatialAtMs = now
