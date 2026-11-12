@@ -138,7 +138,7 @@ class RemoteCameraStreamer(
                 val isFrontCamera = selector == CameraSelector.DEFAULT_FRONT_CAMERA
 
                 val analysis = ImageAnalysis.Builder()
-                    .setTargetResolution(Size(480, 360))
+                    .setTargetResolution(Size(640, 480))
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 imageAnalysis = analysis
@@ -188,7 +188,8 @@ class RemoteCameraStreamer(
             encodingExecutor.execute {
                 if (!isActive(session)) return@execute
                 try {
-                    val jpeg = YuvFrameEncoder.encodeJpeg(yuvFrame)
+                    val quality = sender.recommendedQuality
+                    val jpeg = YuvFrameEncoder.encodeJpeg(yuvFrame, quality)
                     if (isActive(session)) {
                         val detectionStillValid = packetDetectionEnabled &&
                                 detectionEnabled &&
@@ -313,8 +314,8 @@ class RemoteCameraStreamer(
     }
 
     private companion object {
-        private const val VIDEO_FRAME_INTERVAL_MS = 100L
-        private const val DETECTION_FRAME_INTERVAL_MS = 140L
+        private const val VIDEO_FRAME_INTERVAL_MS = 45L
+        private const val DETECTION_FRAME_INTERVAL_MS = 160L
         private const val ERROR_INTERVAL_MS = 3000L
 
         // Ponlo en true solo si algún día quieres ver la cámara frontal como espejo

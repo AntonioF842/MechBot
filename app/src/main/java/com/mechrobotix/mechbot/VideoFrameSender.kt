@@ -20,9 +20,14 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
     @Volatile private var running = false
     @Volatile private var sessionId = 0L
 
+    // Calidad JPEG dinámica ajustada según la velocidad de envío en la red (25..75)
+    @Volatile var recommendedQuality: Int = 65
+        private set
+
     fun start(info: WifiP2pInfo, socketLink: P2pSocketLink? = null) {
         stop()
         running = true
+        recommendedQuality = 65
         val session = ++sessionId
         thread(name = "mechbot-video-sender") {
             var localSocket: Socket? = null
@@ -44,8 +49,9 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
                 if (!running || session != sessionId) return@thread
                 activeSocket.tcpNoDelay = true
                 activeSocket.keepAlive = true
-                activeSocket.sendBufferSize = 256 * 1024
-                val stream = DataOutputStream(BufferedOutputStream(activeSocket.getOutputStream(), 128 * 1024))
+                // Búfer reducido (32 KB) para evitar que TCP encole fotogramas atrasados
+                activeSocket.sendBufferSize = 32 * 1024
+                val stream = DataOutputStream(BufferedOutputStream(activeSocket.getOutputStream(), 16 * 1024))
                 localOutput = stream
                 synchronized(lock) {
                     if (session == sessionId) {
@@ -56,8 +62,11 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
                 postStatus("Video: enlace listo.")
                 while (running && session == sessionId) {
                     val frame = frames.poll(500, TimeUnit.MILLISECONDS) ?: continue
+                    val startNs = System.nanoTime()
                     VideoProtocol.write(stream, frame)
                     stream.flush()
+                    val elapsedMs = (System.nanoTime() - startNs) / 1_000_000L
+                    adjustQuality(elapsedMs)
                 }
             } catch (error: Exception) {
                 if (running && session == sessionId) postStatus("Video: error sender ${error.message}")
@@ -71,6 +80,15 @@ class VideoFrameSender(private val onStatus: (String) -> Unit) {
                     }
                 }
             }
+        }
+    }
+
+    private fun adjustQuality(sendTimeMs: Long) {
+        recommendedQuality = when {
+            sendTimeMs > 80L -> 25  // Red muy congestionada: máxima compresión
+            sendTimeMs > 45L -> 40  // Red moderada
+            sendTimeMs < 20L -> (recommendedQuality + 5).coerceAtMost(75) // Recuperar calidad gradualmente
+            else -> recommendedQuality
         }
     }
 
