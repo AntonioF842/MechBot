@@ -231,7 +231,12 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         applySystemBarInsets()
         bindViews()
         wifi = WifiDirectController(this, this)
-        socketLink = P2pSocketLink(::setStatus, ::onSocketMessage, ::onSocketConnectionChanged)
+        socketLink = P2pSocketLink(
+            onStatus = ::setStatus,
+            onMessage = ::onSocketMessage,
+            onConnectionChanged = ::onSocketConnectionChanged,
+            authToken = LINK_AUTH_TOKEN
+        )
 
         setupMap()
 
@@ -1117,7 +1122,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
     private fun stopHeartbeatAndWatchdog() {
         mainHandler.removeCallbacks(heartbeatRunnable)
-        mainHandler.post(heartbeatRunnable)
+        mainHandler.removeCallbacks(watchdogRunnable)
     }
 
     private fun showRemoteFrame(frame: RemoteVideoFrame) {
@@ -1296,10 +1301,10 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             "permiso usb denegado" in lower || "reporte hid" in lower || "no expone teclado hid" in lower -> txtUsbState.setChip("USB error", ChipState.ERROR)
         }
         when {
-            "wi‑fi direct conectado" in lower || "socket de comandos conectado" in lower -> txtWifiState.setChip("Wi‑Fi listo", ChipState.OK)
-            "conectando" in lower || "buscando" in lower || "búsqueda" in lower || "esperando socket" in lower -> txtWifiState.setChip("Wi‑Fi", ChipState.BUSY)
+            "wi‑fi direct conectado" in lower || "socket de comandos conectado" in lower || "socket de comandos autenticado" in lower -> txtWifiState.setChip("Wi‑Fi listo", ChipState.OK)
+            "conectando" in lower || "buscando" in lower || "búsqueda" in lower || "esperando socket" in lower || "autenticando enlace" in lower -> txtWifiState.setChip("Wi‑Fi", ChipState.BUSY)
             "wi‑fi direct desconectado" in lower || "wi‑fi direct disponible" in lower -> txtWifiState.setChip("Wi‑Fi", ChipState.IDLE)
-            "wi‑fi direct desactivado" in lower || "falló conexión" in lower || "error en socket" in lower -> txtWifiState.setChip("Wi‑Fi error", ChipState.ERROR)
+            "wi‑fi direct desactivado" in lower || "falló conexión" in lower || "error en socket" in lower || "conexión rechazada" in lower -> txtWifiState.setChip("Wi‑Fi error", ChipState.ERROR)
         }
         when {
             "video: recibiendo" in lower || "video: enlace listo" in lower || "cámara frontal remota activa" in lower || "cámara trasera remota activa" in lower -> txtVideoState.setChip("Video listo", ChipState.OK)
@@ -1338,6 +1343,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private companion object {
+        private const val LINK_AUTH_TOKEN = "MECHBOT_SEC_2026_#99A1"
         private const val KEY_ROLE = "role"
         private const val KEY_EYES_FULLSCREEN = "eyesFullscreen"
         private const val KEY_ROBOT_TEST_MODE = "robotTestMode"

@@ -10,13 +10,15 @@ import java.io.OutputStreamWriter
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
 class P2pSocketLink(
     private val onStatus: (String) -> Unit,
     private val onMessage: (String) -> Unit,
-    private val onConnectionChanged: (Boolean) -> Unit
+    private val onConnectionChanged: (Boolean) -> Unit,
+    private val authToken: String = DEFAULT_AUTH_TOKEN
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val sendExecutor = Executors.newSingleThreadExecutor()
@@ -52,7 +54,6 @@ class P2pSocketLink(
                         }
                     }
                     val accepted = server.accept()
-                    // Capturar la IP del cliente remoto que se conectó a este Group Owner
                     remoteClientIp = accepted.inetAddress?.hostAddress
                     accepted
                 } else {
@@ -61,11 +62,35 @@ class P2pSocketLink(
                     postStatus("Conectando socket de comandos a $host:$COMMAND_PORT...")
                     connectWithRetry(host, COMMAND_PORT, session)
                 }
+
                 localSocket = activeSocket
                 if (!running || session != sessionId) return@thread
+
                 activeSocket.tcpNoDelay = true
                 activeSocket.keepAlive = true
+
                 localWriter = BufferedWriter(OutputStreamWriter(activeSocket.getOutputStream()))
+                val reader = BufferedReader(InputStreamReader(activeSocket.getInputStream()))
+
+                // --- FASE DE AUTENTICACIÓN (HANDSHAKE) ---
+                postStatus("Autenticando enlace...")
+                activeSocket.soTimeout = AUTH_TIMEOUT_MS
+
+                // 1. Enviar nuestro token de autenticación inmediatamente
+                localWriter.write("$AUTH_PREFIX$authToken")
+                localWriter.newLine()
+                localWriter.flush()
+
+                // 2. Leer y verificar el token del otro extremo
+                val authLine = reader.readLine()?.trim() ?: ""
+                if (!isValidAuthLine(authLine)) {
+                    postStatus("Conexión rechazada: token de autenticación inválido.")
+                    return@thread // Salta al bloque finally y cierra el socket
+                }
+
+                // 3. Autenticación exitosa: quitar timeout de lectura para operación normal
+                activeSocket.soTimeout = 0
+
                 synchronized(lock) {
                     if (session == sessionId) {
                         socket = activeSocket
@@ -73,17 +98,21 @@ class P2pSocketLink(
                         connected = true
                     }
                 }
-                postStatus("Socket de comandos conectado.")
+                postStatus("Socket de comandos autenticado y conectado.")
                 postConnection(true)
-                val reader = BufferedReader(InputStreamReader(activeSocket.getInputStream()))
+
                 while (running && session == sessionId) {
                     val line = reader.readLine() ?: break
+                    // Ignorar tramas AUTH tardías si llegaran a ocurrir
+                    if (line.startsWith(AUTH_PREFIX)) continue
                     main.post {
                         if (running && session == sessionId) onMessage(line)
                     }
                 }
             } catch (error: Exception) {
-                if (running && session == sessionId) postStatus("Error en socket de comandos: ${error.message}")
+                if (running && session == sessionId) {
+                    postStatus("Error en socket de comandos: ${error.message}")
+                }
             } finally {
                 runCatching { localWriter?.close() }
                 runCatching { localSocket?.close() }
@@ -101,6 +130,16 @@ class P2pSocketLink(
                 if (notify) postConnection(false)
             }
         }
+    }
+
+    private fun isValidAuthLine(line: String): Boolean {
+        if (!line.startsWith(AUTH_PREFIX)) return false
+        val receivedToken = line.removePrefix(AUTH_PREFIX)
+        // Comparación en tiempo constante para evitar timing attacks
+        return MessageDigest.isEqual(
+            receivedToken.toByteArray(Charsets.UTF_8),
+            authToken.toByteArray(Charsets.UTF_8)
+        )
     }
 
     fun sendLine(line: String): Boolean {
@@ -166,5 +205,9 @@ class P2pSocketLink(
 
     companion object {
         const val COMMAND_PORT = 8988
+        private const val AUTH_PREFIX = "AUTH:"
+        private const val AUTH_TIMEOUT_MS = 3000
+        // Cámbialo por tu clave secreta compartida (o pásalo desde BuildConfig / UI)
+        const val DEFAULT_AUTH_TOKEN = "MECHBOT_SEC_2026_#99A1"
     }
 }
