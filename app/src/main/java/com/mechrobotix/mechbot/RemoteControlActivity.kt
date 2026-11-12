@@ -1139,10 +1139,19 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         val previous = remoteBitmap
         remoteBitmap = frame.bitmap
+
+        // Rotación y espejo acelerados por GPU en lugar de recrear Bitmaps por CPU
+        imgRemoteCamera.rotation = frame.rotationDegrees.toFloat()
+        imgRemoteCamera.scaleX = if (frame.mirrored) -1f else 1f
         imgRemoteCamera.setImageBitmap(frame.bitmap)
 
+        // Ajustar dimensiones lógicas del overlay si el frame viene rotado 90° o 270°
+        val isRotated = frame.rotationDegrees % 180 != 0
+        val logicalWidth = if (isRotated) frame.bitmap.height else frame.bitmap.width
+        val logicalHeight = if (isRotated) frame.bitmap.width else frame.bitmap.height
+
         if (frame.detectionEnabled) {
-            detectionOverlay.setFrame(frame.detections, frame.bitmap.width, frame.bitmap.height)
+            detectionOverlay.setFrame(frame.detections, logicalWidth, logicalHeight)
             // El robot usa la cámara trasera solo al retroceder; en cualquier otro comando, la frontal
             val frameGeometry = if (lastSentCommand == MovementCommand.BACKWARD) {
                 CameraProfiles.REAR_CAMERA
@@ -1237,6 +1246,8 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     private fun clearRemoteVideoFrame() {
+        imgRemoteCamera.rotation = 0f
+        imgRemoteCamera.scaleX = 1f
         imgRemoteCamera.setImageDrawable(null)
         detectionOverlay.clear()
         remoteBitmap?.takeIf { !it.isRecycled }?.recycle()

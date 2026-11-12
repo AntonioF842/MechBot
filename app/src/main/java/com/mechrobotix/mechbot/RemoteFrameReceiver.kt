@@ -2,7 +2,6 @@ package com.mechrobotix.mechbot
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
 import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Handler
 import android.os.Looper
@@ -68,12 +67,12 @@ class RemoteFrameReceiver(
                 if (!running || session != sessionId) return@thread
                 activeSocket.tcpNoDelay = true
                 activeSocket.keepAlive = true
-                activeSocket.receiveBufferSize = 256 * 1024
+                activeSocket.receiveBufferSize = 64 * 1024
                 synchronized(lock) {
                     if (session == sessionId) socket = activeSocket
                 }
                 postStatus("Video: recibiendo frames.")
-                val input = DataInputStream(BufferedInputStream(activeSocket.getInputStream(), 128 * 1024))
+                val input = DataInputStream(BufferedInputStream(activeSocket.getInputStream(), 32 * 1024))
                 while (running && session == sessionId) {
                     val packet = VideoProtocol.read(input)
                     val decoded = BitmapFactory.decodeByteArray(
@@ -82,13 +81,14 @@ class RemoteFrameReceiver(
                         packet.jpeg.size,
                         BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.RGB_565 }
                     ) ?: continue
-                    val bitmap = transform(decoded, packet.rotationDegrees, packet.mirrored)
                     offerFrame(
                         session,
                         RemoteVideoFrame(
-                            bitmap = bitmap,
+                            bitmap = decoded,
                             frameId = packet.frameId,
                             timestampMs = packet.timestampMs,
+                            rotationDegrees = packet.rotationDegrees,
+                            mirrored = packet.mirrored,
                             detectionEnabled = packet.detectionEnabled,
                             detections = packet.detections
                         )
@@ -128,17 +128,6 @@ class RemoteFrameReceiver(
         }
         pendingFrame.getAndSet(PendingFrame(session, frame))?.let { recycle(it.frame.bitmap) }
         if (renderScheduled.compareAndSet(false, true)) main.post(renderRunnable)
-    }
-
-    private fun transform(bitmap: Bitmap, rotationDegrees: Int, mirrored: Boolean): Bitmap {
-        if (rotationDegrees == 0 && !mirrored) return bitmap
-        val matrix = Matrix().apply {
-            postRotate(rotationDegrees.toFloat())
-            if (mirrored) postScale(-1f, 1f)
-        }
-        val transformed = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        if (transformed !== bitmap) recycle(bitmap)
-        return transformed
     }
 
     private fun recycle(bitmap: Bitmap) {

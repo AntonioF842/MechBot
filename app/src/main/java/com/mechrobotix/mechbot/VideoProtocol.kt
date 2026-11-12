@@ -20,6 +20,8 @@ data class RemoteVideoFrame(
     val bitmap: Bitmap,
     val frameId: Long,
     val timestampMs: Long,
+    val rotationDegrees: Int = 0,
+    val mirrored: Boolean = false,
     val detectionEnabled: Boolean,
     val detections: List<DetectionResult>
 )
@@ -75,10 +77,10 @@ object VideoProtocol {
                 trackingId = input.readInt(),
                 label = input.readUTF(),
                 confidence = input.readFloat().coerceIn(0f, 1f),
-                left = input.readFloat().coerceIn(0f, 1f),
-                top = input.readFloat().coerceIn(0f, 1f),
-                right = input.readFloat().coerceIn(0f, 1f),
-                bottom = input.readFloat().coerceIn(0f, 1f),
+                left = input.readFloat().coerceAtMost(1f).coerceAtLeast(0f),
+                top = input.readFloat().coerceAtMost(1f).coerceAtLeast(0f),
+                right = input.readFloat().coerceAtMost(1f).coerceAtLeast(0f),
+                bottom = input.readFloat().coerceAtMost(1f).coerceAtLeast(0f),
                 proximity = ObjectProximity.fromWire(input.readUTF())
             )
         }
