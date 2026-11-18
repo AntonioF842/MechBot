@@ -60,6 +60,17 @@ class DirectControlActivity : AppCompatActivity() {
     private val spatialEngine = SpatialNavigationEngine()
     private var lastSpatialResult: SpatialAnalysisResult? = null
 
+    // Asistente de evasión semi-autónomo
+    private lateinit var assistedNavigator: AssistedNavigator
+    private val assistTickRunnable = object : Runnable {
+        override fun run() {
+            if (assistedNavigator.state != AssistState.IDLE) {
+                assistedNavigator.tick()
+                txtMovement.postDelayed(this, 100L)
+            }
+        }
+    }
+
     // Movimiento iniciado por voz: dura poco y el freno autónomo también lo detiene
     private var voiceMovementActive = false
 
@@ -131,6 +142,30 @@ class DirectControlActivity : AppCompatActivity() {
 
         voiceCommandHelper.ensureAudibleVolume()
 
+        assistedNavigator = AssistedNavigator(
+            clock = { SystemClock.elapsedRealtime() },
+            onMove = { cmd ->
+                runOnUiThread {
+                    txtMovement.text = "Asistente: ${cmd.displayName}"
+                    if (motorController.isReady()) motorController.send(cmd)
+                }
+            },
+            onHalt = { reason ->
+                runOnUiThread {
+                    emergencyStop("Asistente detenido: $reason")
+                    voiceCommandHelper.speakAlert(reason)
+                }
+            },
+            onStateChanged = { state, message ->
+                runOnUiThread {
+                    if (message.isNotEmpty() && state != AssistState.CRUISING && state != AssistState.BLOCKED) {
+                        setStatus("Asistente: $message")
+                        voiceCommandHelper.speakIfIdle(message)
+                    }
+                }
+            }
+        )
+
         bciManager = BciBluetoothManager(
             context = this,
             onBrainCommandDetected = { command, confidence -> executeBrainCommand(command, confidence) },
@@ -144,6 +179,23 @@ class DirectControlActivity : AppCompatActivity() {
         motorController.handleIntent(intent)
         motorController.prepare()
         ensureCameraPermissionAndStart()
+    }
+
+    private fun syncAssistantWithCommand(command: MovementCommand) {
+        if (command == MovementCommand.FORWARD && switchDetection.isChecked) {
+            if (assistedNavigator.state == AssistState.IDLE) {
+                assistedNavigator.start()
+                txtMovement.removeCallbacks(assistTickRunnable)
+                txtMovement.postDelayed(assistTickRunnable, 100L)
+            }
+        } else {
+            stopAssistant()
+        }
+    }
+
+    private fun stopAssistant() {
+        assistedNavigator.cancel()
+        txtMovement.removeCallbacks(assistTickRunnable)
     }
 
     override fun onResume() {
@@ -239,6 +291,7 @@ class DirectControlActivity : AppCompatActivity() {
                 txtDetectionState.setChip("Detección", ChipState.BUSY)
                 txtDetectionSummary.text = "Buscando objetos"
             } else {
+                stopAssistant()
                 detectionOverlay.clear()
                 txtDetectionState.setChip("Detección off", ChipState.IDLE)
                 txtDetectionSummary.text = "Detección desactivada"
@@ -341,6 +394,7 @@ class DirectControlActivity : AppCompatActivity() {
             return
         }
 
+        syncAssistantWithCommand(command)
         cameraController.setCameraLens(command == MovementCommand.BACKWARD)
         txtMovement.text = "BCI: ${command.displayName}$confidenceInfo"
 
@@ -364,6 +418,7 @@ class DirectControlActivity : AppCompatActivity() {
             return
         }
 
+        syncAssistantWithCommand(command)
         cameraController.setCameraLens(command == MovementCommand.BACKWARD)
         txtMovement.text = "Voz: ${command.displayName}"
         voiceMovementActive = true
@@ -393,6 +448,7 @@ class DirectControlActivity : AppCompatActivity() {
                     if (activeMovementButtonId != View.NO_ID) return@setOnTouchListener true
                     activeMovementButtonId = button.id
                     updateDirectionButtons()
+                    syncAssistantWithCommand(command)
                     cameraController.setCameraLens(command == MovementCommand.BACKWARD)
                     txtMovement.text = command.displayName
                     if (motorController.isReady()) {
@@ -414,6 +470,7 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun emergencyStop(message: String? = null) {
+        stopAssistant()
         if (motorController.isReady()) {
             motorController.send(MovementCommand.STOP)
         }
@@ -452,6 +509,7 @@ class DirectControlActivity : AppCompatActivity() {
 
     private fun showDetections(detections: List<DetectionResult>, imageWidth: Int, imageHeight: Int) {
         if (!switchDetection.isChecked || imageWidth <= 0 || imageHeight <= 0) {
+            stopAssistant()
             detectionOverlay.clear()
             txtDetectionSummary.text = if (!switchDetection.isChecked) "Detección desactivada" else "Buscando objetos"
             radarView.updateSpatialData(SpatialAnalysisResult(NavigationAction.AVANZAR, "Libre", 0f, false))
@@ -463,6 +521,7 @@ class DirectControlActivity : AppCompatActivity() {
         val spatialResult = spatialEngine.analyze(detections)
         lastSpatialResult = spatialResult
         radarView.updateSpatialData(spatialResult)
+        assistedNavigator.update(spatialResult)
         if (announceObjects) announceNearbyObjects(spatialResult)
 
         if (spatialResult.distanceMeters != null) {
@@ -486,7 +545,7 @@ class DirectControlActivity : AppCompatActivity() {
 
             val movingForward = activeMovementButtonId == R.id.btnForward ||
                     (voiceMovementActive && voiceMovementCommand == MovementCommand.FORWARD)
-            if (movingForward) {
+            if (movingForward && assistedNavigator.state == AssistState.IDLE) {
                 emergencyStop("Detenido por objeto cercano. Gire o retroceda.")
             }
         }
