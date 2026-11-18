@@ -125,6 +125,17 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     private var lastVibrationTime = 0L
     private val spatialEngine = SpatialNavigationEngine(CameraProfiles.FRONT_CAMERA)
 
+    // Asistente de evasión semi-autónomo en modo Controlador
+    private lateinit var assistedNavigator: AssistedNavigator
+    private val assistTickRunnable = object : Runnable {
+        override fun run() {
+            if (role == Role.CONTROLLER && assistedNavigator.state != AssistState.IDLE) {
+                assistedNavigator.tick()
+                mainHandler.postDelayed(this, 100L)
+            }
+        }
+    }
+
     // Último movimiento enviado por el controlador (botones, voz o BCI)
     private var lastSentCommand = MovementCommand.STOP
 
@@ -248,6 +259,35 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
 
         voiceCommandHelper.ensureAudibleVolume()
 
+        assistedNavigator = AssistedNavigator(
+            clock = { SystemClock.elapsedRealtime() },
+            onMove = { cmd ->
+                if (role == Role.CONTROLLER && socketLink.isConnected()) {
+                    socketLink.sendLine(RemoteMessage.Movement(cmd).toWire())
+                    lastSentCommand = cmd
+                }
+            },
+            onHalt = { reason ->
+                runOnUiThread {
+                    stopAssistant()
+                    if (role == Role.CONTROLLER && socketLink.isConnected()) {
+                        socketLink.sendLine(RemoteMessage.Movement(MovementCommand.STOP).toWire())
+                    }
+                    lastSentCommand = MovementCommand.STOP
+                    setStatus("Asistente detenido: $reason")
+                    voiceCommandHelper.speakAlert(reason)
+                }
+            },
+            onStateChanged = { state, message ->
+                runOnUiThread {
+                    if (message.isNotEmpty() && state != AssistState.CRUISING && state != AssistState.BLOCKED) {
+                        setStatus("Asistente: $message")
+                        voiceCommandHelper.speakIfIdle(message)
+                    }
+                }
+            }
+        )
+
         bciManager = BciBluetoothManager(
             context = this,
             onBrainCommandDetected = { command, confidence ->
@@ -272,6 +312,11 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         savedInstanceState?.getString(KEY_ROLE)?.let {
             runCatching { Role.valueOf(it) }.getOrNull()
         }?.takeIf { it != Role.NONE }?.let(::selectRole)
+    }
+
+    private fun stopAssistant() {
+        assistedNavigator.cancel()
+        mainHandler.removeCallbacks(assistTickRunnable)
     }
 
     private fun setupMap() {
@@ -337,6 +382,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     override fun onPause() {
+        stopAssistant()
         stopHeartbeatAndWatchdog()
         locationHelper?.stopLocationUpdates()
         voiceCommandHelper.stopListening()
@@ -379,6 +425,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     override fun onDestroy() {
+        stopAssistant()
         stopHeartbeatAndWatchdog()
         emergencyRobotStop()
         voiceCommandHelper.destroy()
@@ -613,6 +660,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
         if (role == newRole) return
         val previousRole = role
 
+        stopAssistant()
         if (previousRole == Role.ROBOT) emergencyRobotStop()
         releaseRoleResources(previousRole)
         spatialEngine.reset()
@@ -807,6 +855,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             if (enabled) ChipState.OK else ChipState.IDLE
         )
         if (!enabled) {
+            stopAssistant()
             detectionOverlay.clear()
             txtDetectionSummary.text = "Detección desactivada"
             spatialEngine.reset()
@@ -841,6 +890,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             if (role == Role.CONTROLLER) {
                 val reason = message.removePrefix("BRAKE:")
                 runOnUiThread {
+                    stopAssistant()
                     lastSentCommand = MovementCommand.STOP
                     mainHandler.removeCallbacks(voiceStopRunnable)
                     setStatus("Robot detenido por seguridad: $reason")
@@ -1085,7 +1135,20 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             if (message !is RemoteMessage.Ping) setStatus("Aún no hay socket de comandos.")
             return false
         }
-        if (message is RemoteMessage.Movement) lastSentCommand = message.command
+        if (message is RemoteMessage.Movement) {
+            lastSentCommand = message.command
+            if (role == Role.CONTROLLER) {
+                if (message.command == MovementCommand.FORWARD && remoteDetectionEnabled) {
+                    if (assistedNavigator.state == AssistState.IDLE) {
+                        assistedNavigator.start()
+                        mainHandler.removeCallbacks(assistTickRunnable)
+                        mainHandler.postDelayed(assistTickRunnable, 100L)
+                    }
+                } else {
+                    stopAssistant()
+                }
+            }
+        }
         return true
     }
 
@@ -1103,6 +1166,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 startRobotLocationIfAllowed()
             }
         } else {
+            stopAssistant()
             stopHeartbeatAndWatchdog()
             locationHelper?.stopLocationUpdates()
             if (role == Role.ROBOT) emergencyRobotStop("Socket de comandos desconectado.")
@@ -1166,6 +1230,11 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
             lastSpatialResult = spatialResult
             lastSpatialAtMs = now
             radarView.updateSpatialData(spatialResult)
+
+            if (role == Role.CONTROLLER) {
+                assistedNavigator.update(spatialResult)
+            }
+
             if (announceObjects) runOnUiThread { announceNearbyObjects(spatialResult) }
 
             if (spatialResult.distanceMeters != null) {
@@ -1187,13 +1256,14 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 }
 
                 if (role == Role.CONTROLLER && socketLink.isConnected()) {
-                    if (lastSentCommand == MovementCommand.FORWARD) {
+                    if (lastSentCommand == MovementCommand.FORWARD && assistedNavigator.state == AssistState.IDLE) {
                         sendRemoteMessage(RemoteMessage.Movement(MovementCommand.STOP))
                         setStatus("Objeto cercano al frente. Gire o retroceda.")
                     }
                 }
             }
         } else {
+            stopAssistant()
             detectionOverlay.clear()
             lastSpatialResult = null
             txtDetectionSummary.text = "Detección desactivada"
@@ -1225,6 +1295,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
     }
 
     override fun onDisconnected() {
+        stopAssistant()
         latestConnectionInfo = null
         stopNetworkServices()
         btnDisconnectPeer.isEnabled = false
