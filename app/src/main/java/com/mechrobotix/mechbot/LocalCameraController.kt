@@ -100,12 +100,6 @@ class LocalCameraController(
     ) {
         try {
             val preferredSelector = if (isBackwardLens) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
-            val useBackCamera = if (isBackwardLens) {
-                !provider.hasCamera(preferredSelector)
-            } else {
-                provider.hasCamera(preferredSelector)
-            }
-
             val selector = if (provider.hasCamera(preferredSelector)) {
                 preferredSelector
             } else if (provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) {
@@ -119,16 +113,24 @@ class LocalCameraController(
             val mirror = (selector == CameraSelector.DEFAULT_FRONT_CAMERA)
             previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             previewView.scaleType = PreviewView.ScaleType.FIT_CENTER
-            val targetRotation = previewView.display?.rotation ?: Surface.ROTATION_0
+
+            // Obtener rotación real del display (funciona tanto en vertical como en horizontal)
+            val display = ContextCompat.getDisplayOrDefault(context)
+            val targetRotation = display.rotation
+            val isPortrait = targetRotation == Surface.ROTATION_0 || targetRotation == Surface.ROTATION_180
+            val targetSize = if (isPortrait) Size(360, 480) else Size(480, 360)
+
             val preview = Preview.Builder()
                 .setTargetAspectRatio(AspectRatio.RATIO_4_3)
                 .setTargetRotation(targetRotation)
                 .build()
+
             val analysis = ImageAnalysis.Builder()
-                .setTargetResolution(Size(480, 360))
+                .setTargetResolution(targetSize)
                 .setTargetRotation(targetRotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
+
             imageAnalysis = analysis
             analysis.setAnalyzer(cameraExecutor) { image -> analyze(image, mirror, session) }
             preview.setSurfaceProvider(previewView.surfaceProvider)
