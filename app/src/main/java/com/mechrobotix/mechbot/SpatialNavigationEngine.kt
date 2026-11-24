@@ -43,12 +43,7 @@ data class CameraGeometry(
 class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
 
     companion object {
-        private const val CORRIDOR_LEFT = 0.28f
-        private const val CORRIDOR_RIGHT = 0.72f
         private const val MIN_CORRIDOR_OVERLAP = 0.05f
-
-        private const val LEFT_ZONE_END = 0.33f
-        private const val RIGHT_ZONE_START = 0.66f
 
         // DISTANCIA DE FRENO ESTRICITA A 0.7 METROS
         private const val STOP_DISTANCE_M = 0.70f
@@ -68,6 +63,13 @@ class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
         private const val FALLBACK_VERY_CLOSE_M = 0.50f
         private const val FALLBACK_CLOSE_M = 1.00f
     }
+
+    var isPortrait: Boolean = false
+
+    private val corridorLeft get() = if (isPortrait) 0.34f else 0.28f
+    private val corridorRight get() = if (isPortrait) 0.66f else 0.72f
+    private val leftZoneEnd get() = if (isPortrait) 0.28f else 0.33f
+    private val rightZoneStart get() = if (isPortrait) 0.72f else 0.66f
 
     private class TrackState(var distance: Float, var lastTimeMs: Long, var speed: Float)
 
@@ -201,12 +203,12 @@ class SpatialNavigationEngine(var geometry: CameraGeometry = CameraGeometry()) {
 
         val centerX = (d.left + d.right) / 2f
         val zone = when {
-            centerX < LEFT_ZONE_END -> "Izquierda"
-            centerX > RIGHT_ZONE_START -> "Derecha"
+            centerX < leftZoneEnd -> "Izquierda"
+            centerX > rightZoneStart -> "Derecha"
             else -> "Centro"
         }
 
-        val overlap = min(d.right, CORRIDOR_RIGHT) - max(d.left, CORRIDOR_LEFT)
+        val overlap = min(d.right, corridorRight) - max(d.left, corridorLeft)
         return Candidate(
             detection = d,
             distance = distance,
