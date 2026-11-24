@@ -50,10 +50,18 @@
             android:textColor="@color/text_primary" />
     </LinearLayout>
 
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchAssist"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="Asistencia de evasión (semi-autónomo)"
+        android:textColor="@color/text_primary" />
+
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         app:cardBackgroundColor="@color/surface"
         app:cardCornerRadius="18dp"
         app:cardElevation="0dp"
