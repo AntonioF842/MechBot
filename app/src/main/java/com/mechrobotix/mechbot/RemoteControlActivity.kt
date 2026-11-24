@@ -1226,6 +1226,7 @@ class RemoteControlActivity : AppCompatActivity(), WifiDirectController.Callback
                 spatialEngine.geometry = frameGeometry
                 spatialEngine.reset()
             }
+            spatialEngine.isPortrait = logicalHeight > logicalWidth
             val spatialResult = spatialEngine.analyze(frame.detections)
             lastSpatialResult = spatialResult
             lastSpatialAtMs = now

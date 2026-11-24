@@ -39,6 +39,7 @@ class DirectControlActivity : AppCompatActivity() {
     private lateinit var txtDetectionSummary: TextView
     private lateinit var txtMovement: TextView
     private lateinit var switchDetection: SwitchMaterial
+    private lateinit var switchAssist: SwitchMaterial
     private lateinit var btnForward: MaterialButton
     private lateinit var btnBackward: MaterialButton
     private lateinit var btnLeft: MaterialButton
@@ -173,6 +174,7 @@ class DirectControlActivity : AppCompatActivity() {
         )
 
         switchDetection.isChecked = true
+        switchAssist.isChecked = true
         bindControls()
         resetIndicators()
         cameraController.setDetectionEnabled(true)
@@ -182,7 +184,7 @@ class DirectControlActivity : AppCompatActivity() {
     }
 
     private fun syncAssistantWithCommand(command: MovementCommand) {
-        if (command == MovementCommand.FORWARD && switchDetection.isChecked) {
+        if (command == MovementCommand.FORWARD && switchDetection.isChecked && switchAssist.isChecked) {
             if (assistedNavigator.state == AssistState.IDLE) {
                 assistedNavigator.start()
                 txtMovement.removeCallbacks(assistTickRunnable)
@@ -269,6 +271,7 @@ class DirectControlActivity : AppCompatActivity() {
         txtDetectionSummary = findViewById(R.id.txtDetectionSummary)
         txtMovement = findViewById(R.id.txtMovement)
         switchDetection = findViewById(R.id.switchDetection)
+        switchAssist = findViewById(R.id.switchAssist)
         btnForward = findViewById(R.id.btnForward)
         btnBackward = findViewById(R.id.btnBackward)
         btnLeft = findViewById(R.id.btnLeft)
@@ -295,6 +298,23 @@ class DirectControlActivity : AppCompatActivity() {
                 detectionOverlay.clear()
                 txtDetectionState.setChip("Detección off", ChipState.IDLE)
                 txtDetectionSummary.text = "Detección desactivada"
+            }
+        }
+
+        switchAssist.setOnCheckedChangeListener { _, enabled ->
+            if (enabled) {
+                if (!switchDetection.isChecked) {
+                    switchDetection.isChecked = true
+                }
+                val movingForward = activeMovementButtonId == R.id.btnForward ||
+                        (voiceMovementActive && voiceMovementCommand == MovementCommand.FORWARD)
+                if (movingForward) {
+                    syncAssistantWithCommand(MovementCommand.FORWARD)
+                }
+                setStatus("Asistencia de evasión activada.")
+            } else {
+                stopAssistant()
+                setStatus("Asistencia de evasión desactivada (solo freno crítico).")
             }
         }
 
@@ -518,6 +538,7 @@ class DirectControlActivity : AppCompatActivity() {
         }
 
         detectionOverlay.setFrame(detections, imageWidth, imageHeight)
+        spatialEngine.isPortrait = imageHeight > imageWidth
         val spatialResult = spatialEngine.analyze(detections)
         lastSpatialResult = spatialResult
         radarView.updateSpatialData(spatialResult)
